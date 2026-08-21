@@ -10,15 +10,18 @@ from fastapi.staticfiles import StaticFiles
 from .config import SETTINGS, WEB_DIR
 from .protocol import ProtocolError, normalize_client_event
 from .room import RoomManager
+from .room_service import RoomService
 from .storage import JsonBoardStore, validate_board_id
 
 
 def create_app(data_dir: Path | None = None) -> FastAPI:
-    app = FastAPI(title="Local Board", version="0.2.0")
+    app = FastAPI(title="Local Board", version="0.3.0")
     store = JsonBoardStore(data_dir or SETTINGS.data_dir)
     rooms = RoomManager(store)
+    room_service = RoomService(store)
     app.state.store = store
     app.state.rooms = rooms
+    app.state.room_service = room_service
 
     app.mount("/assets", StaticFiles(directory=WEB_DIR / "assets"), name="assets")
 
@@ -27,23 +30,22 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         return {"status": "ok"}
 
     @app.get("/")
-    async def index() -> FileResponse:
-        return FileResponse(WEB_DIR / "index.html")
+    async def home() -> FileResponse:
+        return FileResponse(WEB_DIR / "home.html")
+
+    @app.post("/api/rooms", status_code=201)
+    async def create_room() -> dict[str, str]:
+        room_id = room_service.create_room()
+        return {"room_id": room_id, "path": f"/b/{room_id}"}
 
     @app.get("/b/{board_id}")
     async def board_page(board_id: str) -> FileResponse:
-        try:
-            validate_board_id(board_id)
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail="invalid board id") from exc
+        _require_existing_board(store, board_id)
         return FileResponse(WEB_DIR / "index.html")
 
     @app.get("/api/boards/{board_id}")
     async def board_snapshot(board_id: str) -> dict:
-        try:
-            validate_board_id(board_id)
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail="invalid board id") from exc
+        _require_existing_board(store, board_id)
         room = await rooms.get(board_id)
         return room.snapshot_document()
 
@@ -53,6 +55,9 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             validate_board_id(board_id)
         except ValueError:
             await websocket.close(code=1008, reason="invalid board id")
+            return
+        if not store.exists(board_id):
+            await websocket.close(code=1008, reason="room does not exist")
             return
 
         client_id = websocket.query_params.get("client_id") or str(uuid.uuid4())
@@ -84,6 +89,15 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             await room.disconnect(client_id, websocket)
 
     return app
+
+
+def _require_existing_board(store: JsonBoardStore, board_id: str) -> None:
+    try:
+        validate_board_id(board_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="invalid room id") from exc
+    if not store.exists(board_id):
+        raise HTTPException(status_code=404, detail="room not found")
 
 
 app = create_app()
