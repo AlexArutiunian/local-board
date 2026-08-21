@@ -1,4 +1,5 @@
 import { cloneStroke } from "./board-state.js";
+import { createId } from "./id.js";
 
 export class InputController {
   constructor({ canvas, state, renderer, sendEvent, clientId, onStrokeFinished }) {
@@ -118,7 +119,7 @@ export class InputController {
 
   startStroke(event) {
     this.activePointerId = event.pointerId;
-    this.currentStrokeId = crypto.randomUUID();
+    this.currentStrokeId = createId();
     const stroke = {
       id: this.currentStrokeId,
       color: this.color,
@@ -219,7 +220,7 @@ export class InputController {
   }
 
   withOp(event) {
-    return { ...event, op_id: crypto.randomUUID() };
+    return { ...event, op_id: createId() };
   }
 }
 

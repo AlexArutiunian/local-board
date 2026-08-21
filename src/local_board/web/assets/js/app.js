@@ -2,6 +2,7 @@ import { BoardState, cloneStroke } from "./board-state.js";
 import { CanvasRenderer } from "./canvas-renderer.js";
 import { InputController } from "./input-controller.js";
 import { RealtimeClient } from "./realtime-client.js";
+import { createId } from "./id.js";
 
 const boardId = resolveBoardId();
 const clientId = getClientId();
@@ -92,7 +93,7 @@ function undoLocalStroke() {
     const stroke = localUndo.pop();
     if (!state.hasStroke(stroke.id)) continue;
     localRedo.push(cloneStroke(stroke));
-    const event = { type: "stroke.delete", op_id: crypto.randomUUID(), stroke_id: stroke.id };
+    const event = { type: "stroke.delete", op_id: createId(), stroke_id: stroke.id };
     state.applyEvent(event, null, clientId);
     realtime.send(event);
     renderer.render();
@@ -106,7 +107,7 @@ function redoLocalStroke() {
   if (!stroke) return;
   const event = {
     type: "stroke.restore",
-    op_id: crypto.randomUUID(),
+    op_id: createId(),
     stroke: {
       id: stroke.id,
       color: stroke.color,
@@ -124,7 +125,7 @@ function redoLocalStroke() {
 
 function clearBoard() {
   if (!confirm("Очистить эту доску у всех подключённых участников?")) return;
-  const event = { type: "board.clear", op_id: crypto.randomUUID() };
+  const event = { type: "board.clear", op_id: createId() };
   state.applyEvent(event, null, clientId);
   realtime.send(event);
   localUndo.length = 0;
@@ -169,7 +170,7 @@ function getClientId() {
   const key = "local-board:client-id";
   let id = sessionStorage.getItem(key);
   if (!id) {
-    id = crypto.randomUUID();
+    id = createId();
     sessionStorage.setItem(key, id);
   }
   return id;

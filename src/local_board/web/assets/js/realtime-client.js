@@ -62,7 +62,7 @@ export class RealtimeClient {
 
   send(event) {
     if (event.type !== "ping") {
-      this.pending.set(event.op_id, structuredClone(event));
+      this.pending.set(event.op_id, cloneJson(event));
     }
     if (this.socket?.readyState === WebSocket.OPEN) {
       this.socket.send(JSON.stringify(event));
@@ -70,7 +70,7 @@ export class RealtimeClient {
   }
 
   pendingEvents() {
-    return [...this.pending.values()].map((event) => structuredClone(event));
+    return [...this.pending.values()].map((event) => cloneJson(event));
   }
 
   flushPending() {
@@ -92,4 +92,8 @@ export class RealtimeClient {
     clearTimeout(this.retryTimer);
     this.socket?.close();
   }
+}
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
 }
