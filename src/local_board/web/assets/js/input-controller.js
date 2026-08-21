@@ -43,9 +43,17 @@ export class InputController {
     event.preventDefault();
     this.canvas.setPointerCapture?.(event.pointerId);
 
+    // Finger/palm input is navigation only. Never allow it to create or erase ink.
     if (event.pointerType === "touch") {
       this.touchPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
       this.startTouchGesture();
+      return;
+    }
+
+    // Drawing is deliberately allow-listed to a real stylus. This is stricter than
+    // merely rejecting `touch`: mouse-like or misclassified palm events cannot ink.
+    if (!this.isStylus(event)) {
+      this.startPan(event);
       return;
     }
 
@@ -69,19 +77,29 @@ export class InputController {
       return;
     }
 
-    if (this.tool === "pan" && this.activePointerId === event.pointerId) {
+    if (this.activePointerId !== event.pointerId) return;
+
+    // Non-stylus pointers are navigation-only even while the pen/eraser tool is active.
+    if (!this.isStylus(event)) {
       this.movePan(event);
       return;
     }
 
-    if (this.tool === "eraser" && this.activePointerId === event.pointerId) {
+    if (this.tool === "pan") {
+      this.movePan(event);
+      return;
+    }
+
+    if (this.tool === "eraser") {
       this.eraseAt(event.clientX, event.clientY);
       return;
     }
 
-    if (this.currentStrokeId && this.activePointerId === event.pointerId) {
+    if (this.currentStrokeId) {
       const samples = event.getCoalescedEvents ? event.getCoalescedEvents() : [event];
-      const points = samples.map((sample) => this.eventPoint(sample));
+      const points = samples
+        .filter((sample) => this.isStylus(sample))
+        .map((sample) => this.eventPoint(sample));
       if (!points.length) return;
       const mutation = this.withOp({ type: "stroke.append", stroke_id: this.currentStrokeId, points });
       this.state.applyEvent(mutation, null, this.clientId);
@@ -98,7 +116,7 @@ export class InputController {
       return;
     }
 
-    if (this.currentStrokeId && this.activePointerId === event.pointerId) {
+    if (this.currentStrokeId && this.activePointerId === event.pointerId && this.isStylus(event)) {
       const strokeId = this.currentStrokeId;
       const mutation = this.withOp({ type: "stroke.end", stroke_id: strokeId });
       this.state.applyEvent(mutation, null, this.clientId);
@@ -117,14 +135,20 @@ export class InputController {
     }
   }
 
+  isStylus(event) {
+    return event.pointerType === "pen";
+  }
+
   startStroke(event) {
+    if (!this.isStylus(event)) return;
+
     this.activePointerId = event.pointerId;
     this.currentStrokeId = createId();
     const stroke = {
       id: this.currentStrokeId,
       color: this.color,
       width: this.width,
-      pointer_type: event.pointerType || "pen",
+      pointer_type: "pen",
       points: [this.eventPoint(event)],
     };
     const mutation = this.withOp({ type: "stroke.begin", stroke });
@@ -215,7 +239,7 @@ export class InputController {
     return {
       x: point.x,
       y: point.y,
-      pressure: event.pressure || (event.pointerType === "pen" ? 0.45 : 0.5),
+      pressure: event.pressure || 0.45,
     };
   }
 
