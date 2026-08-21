@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#f5f5f4" />
+  <title>Local Board</title>
+  <link rel="stylesheet" href="/assets/css/home.css" />
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div class="brand-row">
+        <span class="brand-mark"></span>
+        <strong>Local Board</strong>
+      </div>
+
+      <p class="eyebrow">Совместная доска</p>
+      <h1>Создай комнату и отправь ученику ссылку.</h1>
+      <p class="lead">
+        Все участники одной комнаты видят рисунок в realtime. Сейчас сервер может работать в локальной сети,
+        а тот же room-flow рассчитан на будущий HTTPS-деплой.
+      </p>
+
+      <div class="actions">
+        <button id="createRoom" class="primary">Создать новую комнату</button>
+        <span id="createStatus" class="status" aria-live="polite"></span>
+      </div>
+    </section>
+
+    <section class="join-card">
+      <div>
+        <p class="eyebrow">Уже есть комната?</p>
+        <h2>Открыть по коду или ссылке</h2>
+      </div>
+      <form id="joinForm">
+        <input id="roomInput" autocomplete="off" placeholder="Код комнаты или ссылка" aria-label="Код комнаты или ссылка" />
+        <button type="submit">Открыть</button>
+      </form>
+      <p id="joinError" class="error hidden" aria-live="polite"></p>
+    </section>
+  </main>
+
+  <script type="module" src="/assets/js/home.js"></script>
+</body>
+</html>
