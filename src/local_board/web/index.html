@@ -12,19 +12,22 @@
 <body>
   <div id="app">
     <header class="topbar">
-      <div class="brand">
+      <a class="brand" href="/" aria-label="На главную">
         <span class="brand-mark"></span>
         <div>
           <strong>Local Board</strong>
-          <span id="boardName" class="board-name">main</span>
+          <span id="boardName" class="board-name">room</span>
         </div>
-      </div>
+      </a>
 
-      <div class="presence" aria-live="polite">
-        <span id="connectionDot" class="presence-dot offline"></span>
-        <span id="connectionText">Подключение…</span>
-        <span class="separator">•</span>
-        <span id="participants">0 участников</span>
+      <div class="topbar-actions">
+        <button id="shareRoom" class="share-room" type="button" title="Скопировать ссылку на комнату">Поделиться</button>
+        <div class="presence" aria-live="polite">
+          <span id="connectionDot" class="presence-dot offline"></span>
+          <span id="connectionText">Подключение…</span>
+          <span class="separator">•</span>
+          <span id="participants">0 участников</span>
+        </div>
       </div>
     </header>
 
