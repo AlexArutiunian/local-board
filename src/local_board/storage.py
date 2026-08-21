@@ -15,8 +15,12 @@ def validate_board_id(board_id: str) -> str:
     return board_id
 
 
+def empty_board_document(board_id: str) -> dict[str, Any]:
+    return {"version": 1, "board_id": board_id, "revision": 0, "strokes": []}
+
+
 class JsonBoardStore:
-    """Atomic JSON persistence for local single-host boards."""
+    """Atomic JSON persistence for a single-host board server."""
 
     def __init__(self, data_dir: Path):
         self.boards_dir = data_dir / "boards"
@@ -26,10 +30,29 @@ class JsonBoardStore:
     def _path(self, board_id: str) -> Path:
         return self.boards_dir / f"{validate_board_id(board_id)}.json"
 
+    def exists(self, board_id: str) -> bool:
+        return self._path(board_id).is_file()
+
+    def create(self, board_id: str) -> bool:
+        """Create an empty room exactly once; return False on id collision."""
+        path = self._path(board_id)
+        encoded = json.dumps(
+            empty_board_document(board_id),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        with self._write_lock:
+            try:
+                with path.open("x", encoding="utf-8") as file:
+                    file.write(encoded)
+            except FileExistsError:
+                return False
+        return True
+
     def load(self, board_id: str) -> dict[str, Any]:
         path = self._path(board_id)
         if not path.exists():
-            return {"version": 1, "board_id": board_id, "revision": 0, "strokes": []}
+            return empty_board_document(board_id)
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
