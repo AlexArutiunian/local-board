@@ -2,37 +2,74 @@
 
 ## Goal
 
-`local-board` — локальная realtime-доска: один Linux-хост держит состояние, а iPad, ноутбуки и другие браузеры открывают одну и ту же доску и видят изменения друг друга во время рисования.
+`local-board` — room-based realtime-доска для занятий. Преподаватель создаёт комнату, отправляет ссылку ученику, и все участники комнаты видят общий canvas во время рисования.
 
-Главный сценарий: пользователь пишет Apple Pencil на iPad → штрих сразу рисуется локально → точки отправляются через WebSocket → сервер применяет событие → остальные клиенты получают его и дорисовывают тот же штрих.
+Текущий способ запуска — один Linux-хост в LAN. При этом приложение намеренно **host-agnostic**: frontend использует same-origin HTTP/WebSocket URLs и не знает, работает ли он на `192.168.x.x`, `localhost` или будущем HTTPS-домене.
+
+Главный сценарий:
+
+```text
+teacher creates room
+→ server persists room identity
+→ teacher shares /b/<room-id>
+→ student opens the same URL
+→ both connect to the same BoardRoom
+→ Pencil stroke renders locally immediately
+→ mutation travels over WebSocket
+→ server applies authoritative state
+→ other participants render it live
+→ durable snapshot is persisted
+```
 
 ## Components
 
 ```mermaid
 flowchart LR
-    I[iPad / Apple Pencil] <-->|WebSocket| S[FastAPI realtime server]
+    H[Room lobby] -->|POST /api/rooms| A[FastAPI app]
+    A --> RS[RoomService]
+    RS --> J[(Room snapshots)]
+
+    I[iPad / Apple Pencil] <-->|WebSocket| S[Realtime server]
     L[Laptop browser] <-->|WebSocket| S
-    O[Other browser] <-->|WebSocket| S
+    O[Student browser] <-->|WebSocket| S
     S --> M[BoardRoom in memory]
-    M --> J[(Atomic JSON snapshots)]
+    M --> J
 ```
+
+### Room lifecycle
+
+Rooms are explicit resources.
+
+1. `POST /api/rooms` allocates a random URL-safe room id.
+2. An empty persisted board document is created immediately.
+3. `/b/<room-id>` is available only for an existing room.
+4. WebSocket connections are also rejected for unknown room ids.
+
+Random room ids are hard to guess, which is useful for local demos and invitation UX, but **they are not an authorization system**. Public deployment still needs explicit ownership/permissions.
 
 ### Frontend
 
 - native Canvas 2D + Pointer Events;
-- Apple Pencil uses `pointerType=pen` and pressure;
-- touch on canvas pans/zooms instead of leaving accidental ink;
+- `pointerType === "pen"` is the only ink/eraser input path;
+- touch/palm never creates ink;
+- while Pencil is active, touch/palm is ignored so the canvas does not move under the hand;
+- otherwise one finger pans and two fingers pinch-zoom;
 - local stroke is rendered optimistically before network round-trip;
-- viewport (`x/y/zoom`) is local per browser and is never synchronized.
+- viewport (`x/y/zoom`) is local per browser and is never synchronized;
+- API requests use relative same-origin paths;
+- WebSocket derives `ws://` / `wss://` from `location.protocol`;
+- share links use `location.origin`, so no host/IP is hardcoded.
 
 ### Backend
 
-- FastAPI serves the app and WebSocket endpoint;
-- one `BoardRoom` is the authoritative in-memory state for one board id;
+- FastAPI serves lobby, board UI, API and WebSocket endpoint;
+- `RoomService` owns explicit room creation;
+- `JsonBoardStore` owns durable room state for the current single-host deployment;
+- one `BoardRoom` is the authoritative in-memory state for one active room;
 - each mutation has `op_id`;
 - sender receives `ack`;
 - server remembers recent `op_id` values and ignores retries, making reconnect resend idempotent;
-- completed mutations are persisted atomically to JSON.
+- completed mutations are persisted atomically.
 
 ## Realtime protocol
 
@@ -66,26 +103,73 @@ This avoids losing a just-written stroke during a short Wi-Fi interruption.
 
 ## Persistence
 
-By default, runtime data is outside the git checkout:
+Current single-host storage:
 
 ```text
-~/.local/share/local-board/boards/<board-id>.json
+~/.local/share/local-board/boards/<room-id>.json
 ```
 
 Override with `LOCAL_BOARD_DATA_DIR`.
 
-JSON is enough for a local single-host board and keeps setup simple. If the project later needs multiple backend processes or internet-scale rooms, replace the room/persistence layer with a shared event/state backend (for example Redis + durable DB) without changing the browser protocol.
+JSON is intentionally enough for the current LAN/single-instance phase. The room creation and realtime layers are separated from persistence so the future internet version can replace this with durable shared storage without changing canvas input or the browser protocol.
 
-## Concurrency and limits
+## Deployment boundary
 
-Current target is a trusted local network and a small collaborative room. The server is single-process and keeps active boards in memory. Protocol validation caps point batch size and stroke size to avoid unbounded client payloads.
+### Current phase: LAN / one process
 
-## Deliberate non-goals for this version
+- one Uvicorn/FastAPI process;
+- active room state is in memory;
+- JSON snapshots are on local persistent disk;
+- trusted/small room usage;
+- no authentication yet.
 
-- authentication/permissions;
-- internet-facing deployment hardening;
+### Future single-instance internet deployment
+
+The same application can sit behind an HTTPS reverse proxy:
+
+```text
+Browsers
+  ↓ HTTPS / WSS
+Reverse proxy / TLS termination
+  ↓ HTTP / WS
+one Local Board application process
+  ↓
+persistent volume
+```
+
+Important: while `BoardRoom` state is process-local, run **one application worker**. Multiple workers would split participants of the same room unless a shared realtime/state layer is introduced.
+
+Before exposing the service publicly, add at minimum:
+
+- HTTPS/WSS;
+- teacher ownership and participant permissions;
+- authentication/invite policy appropriate for the product;
+- rate limits for room creation and WebSocket traffic;
+- WebSocket Origin/Host policy;
+- request/body limits and abuse monitoring;
+- persistent backups;
+- secrets/config outside source control.
+
+### Future multi-instance scale
+
+If one process/server is no longer enough, add a shared coordination layer instead of relying on sticky sessions for correctness:
+
+- shared durable DB for room metadata/state;
+- Redis or another broker for cross-instance room events/presence;
+- application instances become horizontally scalable;
+- migrations/versioning become explicit.
+
+CRDT should only be introduced when richer concurrent object editing actually requires it; realtime ink alone does not justify that complexity yet.
+
+## Deliberate non-goals for the current version
+
+- teacher/student roles;
+- accounts/authentication;
+- public internet hardening;
 - multi-process horizontal scaling;
-- CRDT for arbitrary object editing;
-- text/shapes/images/PDF objects.
+- text/shapes/images/PDF objects;
+- lesson scheduling/history UI.
 
-Those can be added after the core realtime ink path is stable.
+These are future product layers, not reasons to compromise the current realtime ink path.
+
+See [`deployment.md`](deployment.md) for the staged deployment plan.
