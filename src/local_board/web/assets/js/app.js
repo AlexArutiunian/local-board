@@ -86,6 +86,7 @@ function bindToolbar() {
   document.getElementById("resetView").addEventListener("click", () => renderer.resetView());
   document.getElementById("exportPng").addEventListener("click", () => renderer.exportPng());
   document.getElementById("clearBoard").addEventListener("click", clearBoard);
+  document.getElementById("shareRoom").addEventListener("click", copyRoomLink);
 }
 
 function undoLocalStroke() {
@@ -134,6 +135,42 @@ function clearBoard() {
   updateUndoButtons();
 }
 
+async function copyRoomLink() {
+  const button = document.getElementById("shareRoom");
+  const roomUrl = `${location.origin}/b/${encodeURIComponent(boardId)}`;
+  const copied = await copyText(roomUrl);
+  const previous = button.textContent;
+  button.textContent = copied ? "Ссылка скопирована" : "Не скопировалось";
+  setTimeout(() => { button.textContent = previous; }, 1600);
+}
+
+async function copyText(text) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (_) {
+    // LAN HTTP can deny Clipboard API; fall through to the legacy copy path.
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch (_) {
+    copied = false;
+  }
+  textarea.remove();
+  return copied;
+}
+
 function updateUndoButtons() {
   document.getElementById("undo").disabled = !localUndo.some((stroke) => state.hasStroke(stroke.id));
   document.getElementById("redo").disabled = localRedo.length === 0;
@@ -163,7 +200,8 @@ function updateConnection(status) {
 
 function resolveBoardId() {
   const match = location.pathname.match(/^\/b\/([A-Za-z0-9][A-Za-z0-9_-]{0,63})\/?$/);
-  return match ? match[1] : "main";
+  if (!match) throw new Error("Room id is missing from the URL");
+  return match[1];
 }
 
 function getClientId() {
