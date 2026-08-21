@@ -1,0 +1,4 @@
+data/board.json
+__pycache__/
+*.py[cod]
+.DS_Store
