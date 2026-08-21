@@ -22,7 +22,11 @@ dev = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-local_board = ["web/**/*"]
+local_board = [
+  "web/*.html",
+  "web/assets/css/*.css",
+  "web/assets/js/*.js",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
