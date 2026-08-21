@@ -7,7 +7,13 @@
 ```bash
 git clone https://github.com/AlexArutiunian/local-board.git
 cd local-board
-./run.sh
+bash run.sh
+```
+
+Можно и напрямую:
+
+```bash
+python3 app.py
 ```
 
 Локально на Linux:
@@ -62,7 +68,7 @@ ss -ltnp | grep 8000
 Другой порт:
 
 ```bash
-WHITEBOARD_PORT=9000 ./run.sh
+WHITEBOARD_PORT=9000 bash run.sh
 ```
 
 Остановка сервера: `Ctrl+C`.
