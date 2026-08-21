@@ -110,10 +110,10 @@ export class InputController {
     }
 
     if (this.currentStrokeId) {
+      // All coalesced samples belong to the already verified active Pencil pointer.
+      // Do not re-filter them: Safari may expose less metadata on coalesced samples.
       const samples = event.getCoalescedEvents ? event.getCoalescedEvents() : [event];
-      const points = samples
-        .filter((sample) => this.isStylus(sample))
-        .map((sample) => this.eventPoint(sample));
+      const points = samples.map((sample) => this.eventPoint(sample));
       if (!points.length) return;
       const mutation = this.withOp({ type: "stroke.append", stroke_id: this.currentStrokeId, points });
       this.state.applyEvent(mutation, null, this.clientId);
