@@ -14,6 +14,7 @@ export class InputController {
     this.color = "#111111";
     this.width = 4;
     this.activePointerId = null;
+    this.activePointerType = null;
     this.currentStrokeId = null;
     this.touchPointers = new Map();
     this.panAnchor = null;
@@ -41,13 +42,23 @@ export class InputController {
 
   onPointerDown(event) {
     event.preventDefault();
-    this.canvas.setPointerCapture?.(event.pointerId);
 
-    // Finger/palm input is navigation only. Never allow it to create or erase ink.
     if (event.pointerType === "touch") {
+      // Palm rejection: a hand resting on the screen must not move the board while
+      // Pencil is drawing/erasing/panning. Finger navigation resumes after Pencil up.
+      if (this.isStylusActive()) return;
+
+      this.canvas.setPointerCapture?.(event.pointerId);
       this.touchPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
       this.startTouchGesture();
       return;
+    }
+
+    this.canvas.setPointerCapture?.(event.pointerId);
+
+    // A stylus takes priority over any finger gesture already in progress.
+    if (this.isStylus(event)) {
+      this.cancelTouchGesture();
     }
 
     // Drawing is deliberately allow-listed to a real stylus. This is stricter than
@@ -61,6 +72,7 @@ export class InputController {
       this.startPan(event);
     } else if (this.tool === "eraser") {
       this.activePointerId = event.pointerId;
+      this.activePointerType = "pen";
       this.erasedThisGesture.clear();
       this.eraseAt(event.clientX, event.clientY);
     } else {
@@ -71,7 +83,9 @@ export class InputController {
   onPointerMove(event) {
     event.preventDefault();
 
-    if (event.pointerType === "touch" && this.touchPointers.has(event.pointerId)) {
+    if (event.pointerType === "touch") {
+      if (this.isStylusActive()) return;
+      if (!this.touchPointers.has(event.pointerId)) return;
       this.touchPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
       this.moveTouchGesture();
       return;
@@ -112,7 +126,7 @@ export class InputController {
     if (event.pointerType === "touch") {
       this.touchPointers.delete(event.pointerId);
       this.resetTouchAnchors();
-      this.renderer.saveView();
+      if (!this.isStylusActive()) this.renderer.saveView();
       return;
     }
 
@@ -129,6 +143,7 @@ export class InputController {
 
     if (this.activePointerId === event.pointerId) {
       this.activePointerId = null;
+      this.activePointerType = null;
       this.panAnchor = null;
       this.erasedThisGesture.clear();
       this.renderer.saveView();
@@ -139,10 +154,15 @@ export class InputController {
     return event.pointerType === "pen";
   }
 
+  isStylusActive() {
+    return this.activePointerId !== null && this.activePointerType === "pen";
+  }
+
   startStroke(event) {
     if (!this.isStylus(event)) return;
 
     this.activePointerId = event.pointerId;
+    this.activePointerType = "pen";
     this.currentStrokeId = createId();
     const stroke = {
       id: this.currentStrokeId,
@@ -159,6 +179,7 @@ export class InputController {
 
   startPan(event) {
     this.activePointerId = event.pointerId;
+    this.activePointerType = event.pointerType || null;
     this.panAnchor = { x: event.clientX, y: event.clientY };
   }
 
@@ -208,6 +229,12 @@ export class InputController {
       const newZoom = this.pinchAnchor.zoom * (currentDistance / Math.max(1, this.pinchAnchor.distance));
       this.renderer.zoomAt(center.x, center.y, newZoom);
     }
+  }
+
+  cancelTouchGesture() {
+    this.touchPointers.clear();
+    this.panAnchor = null;
+    this.pinchAnchor = null;
   }
 
   resetTouchAnchors() {
