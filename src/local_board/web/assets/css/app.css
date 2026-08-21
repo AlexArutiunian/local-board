@@ -1,0 +1,120 @@
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, system-ui, sans-serif;
+  color: #1c1917;
+  background: #f5f5f4;
+}
+
+* { box-sizing: border-box; }
+html, body, #app { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+body { overscroll-behavior: none; }
+button, input { font: inherit; }
+
+#app { display: flex; flex-direction: column; background: #f5f5f4; }
+.topbar {
+  min-height: 58px;
+  padding: max(9px, env(safe-area-inset-top)) 14px 9px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid #e7e5e4;
+  background: rgba(255,255,255,.94);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  z-index: 10;
+}
+.brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.brand-mark { width: 13px; height: 13px; border-radius: 4px; background: #111827; box-shadow: 7px 7px 0 #d6d3d1; }
+.brand strong { display: block; font-size: 15px; line-height: 1.1; }
+.board-name { display: block; margin-top: 2px; color: #78716c; font-size: 12px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.presence { display: flex; align-items: center; gap: 7px; color: #57534e; font-size: 13px; white-space: nowrap; }
+.presence-dot { width: 8px; height: 8px; border-radius: 50%; background: #a8a29e; }
+.presence-dot.online { background: #16a34a; }
+.presence-dot.connecting { background: #f59e0b; }
+.presence-dot.offline { background: #dc2626; }
+.separator { color: #d6d3d1; }
+
+#stage { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; background: #fafaf9; }
+#board { width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; }
+
+.toolbar {
+  position: absolute;
+  left: 50%;
+  bottom: max(18px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  max-width: calc(100% - 24px);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid rgba(214,211,209,.9);
+  border-radius: 16px;
+  background: rgba(255,255,255,.95);
+  box-shadow: 0 10px 32px rgba(28,25,23,.12);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  overflow-x: auto;
+  scrollbar-width: none;
+  z-index: 5;
+}
+.toolbar::-webkit-scrollbar { display: none; }
+.tool-section { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.divider { width: 1px; height: 28px; background: #e7e5e4; flex: 0 0 auto; }
+
+button {
+  min-width: 40px;
+  height: 40px;
+  padding: 0 10px;
+  border: 1px solid #d6d3d1;
+  border-radius: 11px;
+  background: #fff;
+  color: #292524;
+  font-weight: 650;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+button:active { transform: scale(.97); }
+button.active { border-color: #1c1917; background: #1c1917; color: white; }
+button.danger { color: #b91c1c; }
+
+.color {
+  min-width: 32px;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--c);
+  border: 3px solid white;
+  box-shadow: 0 0 0 1px #d6d3d1;
+}
+.color.active { box-shadow: 0 0 0 3px #1c1917; }
+.width-control { display: flex; align-items: center; gap: 7px; min-width: 124px; flex: 0 0 auto; }
+.width-control input { width: 88px; }
+#widthLabel { width: 20px; text-align: center; font-size: 12px; font-variant-numeric: tabular-nums; }
+
+.offline-banner {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 24px);
+  padding: 8px 12px;
+  border: 1px solid #fed7aa;
+  border-radius: 10px;
+  background: rgba(255,247,237,.96);
+  color: #9a3412;
+  font-size: 12px;
+  box-shadow: 0 5px 20px rgba(124,45,18,.08);
+  z-index: 4;
+}
+.hidden { display: none !important; }
+
+@media (max-width: 720px) {
+  .topbar { min-height: 52px; padding-left: 10px; padding-right: 10px; }
+  .presence #connectionText { display: none; }
+  .separator { display: none; }
+  .toolbar { left: 10px; right: 10px; transform: none; max-width: none; bottom: max(10px, env(safe-area-inset-bottom)); }
+  button { min-width: 38px; height: 38px; padding: 0 8px; }
+  .width-control { min-width: 110px; }
+  .width-control input { width: 74px; }
+}

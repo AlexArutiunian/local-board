@@ -1,59 +1,113 @@
-# local-board
+# Local Board
 
-Локальная веб-доска для iPad / Apple Pencil. Сервер запускается на Linux, а доска открывается в Safari по локальной сети.
+Локальная совместная веб-доска для iPad / Apple Pencil и обычных браузеров.
 
-## Запуск
+**Главное:** все устройства, которые открыли одну и ту же доску, видят рисование друг друга в realtime. Linux-машина выступает локальным сервером и хранит состояние досок.
+
+## Что уже есть
+
+- realtime-штрихи через WebSocket;
+- Apple Pencil + pressure;
+- локальное optimistic rendering: Pencil не ждёт сеть;
+- палец на iPad используется для pan/pinch zoom, чтобы не оставлять случайные линии;
+- ручка, ластик, цвета, толщина;
+- undo/redo собственных штрихов с синхронизацией у всех;
+- общий clear board;
+- online/offline status и число подключённых клиентов;
+- reconnect с повторной отправкой неподтверждённых операций;
+- защита от повторного применения операций через `op_id`;
+- серверный snapshot при подключении;
+- атомарное сохранение состояния на Linux;
+- отдельный viewport на каждом устройстве;
+- PNG текущего вида.
+
+## Структура
+
+```text
+.
+├── AGENTS.md
+├── README.md
+├── pyproject.toml
+├── docs/
+│   └── architecture.md
+├── scripts/
+│   └── run.sh
+├── src/local_board/
+│   ├── config.py
+│   ├── main.py
+│   ├── models.py
+│   ├── protocol.py
+│   ├── room.py
+│   ├── storage.py
+│   └── web/
+│       ├── index.html
+│       └── assets/
+└── tests/
+```
+
+## Запуск на Linux
 
 ```bash
 git clone https://github.com/AlexArutiunian/local-board.git
 cd local-board
-bash run.sh
+bash scripts/run.sh
 ```
 
-Можно и напрямую:
-
-```bash
-python3 app.py
-```
-
-Локально на Linux:
+Сервер будет доступен локально:
 
 ```text
 http://127.0.0.1:8000
 ```
 
-Чтобы открыть с iPad, узнай IP Linux:
+Узнай IP Linux:
 
 ```bash
 hostname -I
 ```
 
-Например, если адрес Linux `192.168.1.50`, открой в Safari:
+Например, Linux имеет адрес `192.168.1.50`.
+
+Открой **на всех устройствах один и тот же URL**:
 
 ```text
-http://192.168.1.50:8000
+http://192.168.1.50:8000/b/study
 ```
 
-## Возможности MVP
+Теперь линия, которую ты проводишь на iPad, должна появляться на ноутбуке/ПК во время рисования.
 
-- Apple Pencil, палец и мышь;
-- сглаженные штрихи;
-- учёт pressure Apple Pencil;
-- ручка, ластик и перемещение холста;
-- pinch-to-zoom двумя пальцами;
-- undo / redo;
-- несколько цветов и настройка толщины;
-- точечная сетка;
-- автосохранение на Linux;
-- экспорт текущего вида в PNG.
+Можно создавать разные доски просто разными именами:
 
-Никаких `npm install` или `pip install` не требуется — нужен только Python 3.
+```text
+/b/study
+/b/math
+/b/lecture_01
+```
 
-Состояние доски хранится локально в `data/board.json` и не коммитится в Git.
+## Где хранятся доски
 
-## Firewall
+По умолчанию:
 
-Если iPad не видит сервер:
+```text
+~/.local/share/local-board/boards/
+```
+
+То есть пользовательские данные не лежат внутри git-репозитория.
+
+Свой каталог:
+
+```bash
+LOCAL_BOARD_DATA_DIR=/path/to/data bash scripts/run.sh
+```
+
+Другой порт:
+
+```bash
+LOCAL_BOARD_PORT=9000 bash scripts/run.sh
+```
+
+## Если iPad не подключается
+
+Устройства должны видеть Linux по локальной сети. Если включён UFW:
 
 ```bash
 sudo ufw allow 8000/tcp
@@ -65,10 +119,20 @@ sudo ufw allow 8000/tcp
 ss -ltnp | grep 8000
 ```
 
-Другой порт:
+Health check:
 
-```bash
-WHITEBOARD_PORT=9000 bash run.sh
+```text
+http://127.0.0.1:8000/health
 ```
 
-Остановка сервера: `Ctrl+C`.
+## Development
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -e '.[dev]'
+pytest
+uvicorn local_board.main:app --host 0.0.0.0 --port 8000
+```
+
+Архитектура и realtime protocol: [`docs/architecture.md`](docs/architecture.md).
