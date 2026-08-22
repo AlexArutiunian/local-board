@@ -38,7 +38,7 @@ if (!InputController.prototype.__selectionProductivityBootstrap) {
     installTouchNavigation(this);
     installSelectionEndRecovery(this, productivity, interaction);
 
-    new FormulaTransformController({
+    const formulaTransform = new FormulaTransformController({
       boardId: resolveBoardId(),
       selection: this.selection,
       state: this.state,
@@ -47,6 +47,10 @@ if (!InputController.prototype.__selectionProductivityBootstrap) {
       clientId: this.clientId,
       showToast: showBoardToast,
     });
+    // Area-selection toolbar is owned by SelectionInteractionV2 rather than the
+    // old object toolbar. Expose the same controller so its button can call the
+    // exact same OCR pipeline.
+    this.selection.formulaTransform = formulaTransform;
   };
   InputController.prototype.__selectionProductivityBootstrap = true;
 }
