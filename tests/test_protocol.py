@@ -82,6 +82,33 @@ def test_normalizes_image_object_and_update():
     assert updated["patch"]["crop_width"] == 0.7
 
 
+def test_normalizes_image_reorder():
+    event = normalize_client_event(
+        {
+            "type": "object.reorder",
+            "op_id": "obj-front",
+            "object_id": "img-1",
+            "position": "front",
+        }
+    )
+    assert event == {
+        "type": "object.reorder",
+        "op_id": "obj-front",
+        "object_id": "img-1",
+        "position": "front",
+    }
+
+    with pytest.raises(ProtocolError):
+        normalize_client_event(
+            {
+                "type": "object.reorder",
+                "op_id": "obj-middle",
+                "object_id": "img-1",
+                "position": "middle",
+            }
+        )
+
+
 def test_rejects_invalid_crop_values():
     with pytest.raises(ProtocolError):
         normalize_client_event(
