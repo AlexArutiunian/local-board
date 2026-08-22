@@ -6,6 +6,10 @@ const joinError = document.getElementById("joinError");
 
 createButton.addEventListener("click", createRoom);
 joinForm.addEventListener("submit", openRoom);
+roomInput.addEventListener("input", () => {
+  roomInput.value = roomInput.value.replace(/\D/g, "").slice(0, 4);
+  hideJoinError();
+});
 
 async function createRoom() {
   createButton.disabled = true;
@@ -24,32 +28,13 @@ async function createRoom() {
 
 function openRoom(event) {
   event.preventDefault();
-  const roomId = parseRoomId(roomInput.value);
-  if (!roomId) {
-    showJoinError("Введи корректный код комнаты или ссылку.");
+  const roomId = roomInput.value.trim();
+  if (!/^\d{4}$/.test(roomId)) {
+    showJoinError("Код комнаты — ровно 4 цифры.");
     return;
   }
   hideJoinError();
-  location.assign(`/b/${encodeURIComponent(roomId)}`);
-}
-
-function parseRoomId(rawValue) {
-  const value = rawValue.trim();
-  if (!value) return null;
-
-  let candidate = value;
-  try {
-    if (/^https?:\/\//i.test(value)) {
-      candidate = new URL(value).pathname;
-    }
-  } catch (_) {
-    return null;
-  }
-
-  const pathMatch = candidate.match(/^\/?b\/([A-Za-z0-9][A-Za-z0-9_-]{0,63})\/?$/);
-  if (pathMatch) return pathMatch[1];
-  if (/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(candidate)) return candidate;
-  return null;
+  location.assign(`/b/${roomId}`);
 }
 
 function showJoinError(message) {
