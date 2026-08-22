@@ -1,0 +1,86 @@
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+.selection-action {
+  color: #b91c1c;
+}
+
+.action-popover {
+  width: 236px;
+  padding: 7px;
+  border: 1px solid rgba(214,211,209,.88);
+  border-radius: 15px;
+  background: rgba(255,255,255,.98);
+  box-shadow: 0 16px 42px rgba(28,25,23,.16), 0 3px 10px rgba(28,25,23,.06);
+  backdrop-filter: blur(22px) saturate(1.15);
+  -webkit-backdrop-filter: blur(22px) saturate(1.15);
+  transform: translateX(-50%);
+}
+
+.popover-action {
+  width: 100%;
+  min-height: 38px;
+  height: auto;
+  padding: 9px 11px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  border-color: transparent;
+  background: transparent;
+  text-align: left;
+  font-size: 12px;
+}
+.popover-action:hover {
+  border-color: transparent;
+  background: #f5f5f4;
+}
+.popover-action.danger { color: #b91c1c; }
+
+.board-toast {
+  position: absolute;
+  left: 50%;
+  top: max(76px, calc(env(safe-area-inset-top) + 64px));
+  z-index: 16;
+  transform: translateX(-50%);
+  max-width: min(420px, calc(100% - 28px));
+  padding: 9px 13px;
+  border: 1px solid rgba(214,211,209,.9);
+  border-radius: 12px;
+  background: rgba(255,255,255,.96);
+  box-shadow: 0 8px 26px rgba(28,25,23,.1);
+  color: #44403c;
+  font-size: 12px;
+  pointer-events: none;
+}
+.board-toast.error { color: #b91c1c; border-color: #fecaca; background: rgba(255,247,247,.97); }
+.board-toast.success { color: #166534; border-color: #bbf7d0; background: rgba(247,254,249,.97); }
+
+#stage.asset-dragover::after {
+  content: "Отпусти изображение, чтобы добавить";
+  position: absolute;
+  inset: 18px;
+  z-index: 13;
+  display: grid;
+  place-items: center;
+  border: 2px dashed rgba(37,99,235,.55);
+  border-radius: 20px;
+  background: rgba(239,246,255,.68);
+  color: #1d4ed8;
+  font-size: 14px;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+@media (max-width: 720px) {
+  .action-popover { width: 220px; }
+  .drawing-controls { gap: 4px; }
+}
