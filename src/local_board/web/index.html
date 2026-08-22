@@ -17,12 +17,8 @@
       <header class="topbar" aria-label="Панель комнаты">
         <a class="topbar-card brand" href="/" aria-label="К списку досок">
           <span class="brand-mark"></span>
-          <div>
-            <strong>Local Board</strong>
-            <span id="boardName" class="board-name">room</span>
-          </div>
+          <div><strong>Local Board</strong><span id="boardName" class="board-name">room</span></div>
         </a>
-
         <div class="topbar-card topbar-actions">
           <div class="presence" aria-live="polite">
             <span id="connectionDot" class="presence-dot offline"></span>
@@ -36,6 +32,9 @@
 
       <div class="toolbar" role="toolbar" aria-label="Инструменты доски">
         <div class="tool-section primary-tools">
+          <button class="tool icon-button" data-tool="select" title="Выделение (V). Ctrl/Cmd + drag работает из любого режима" aria-label="Выделение">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 3 13 9-6 1.5L9 20 5 3Z"/></svg>
+          </button>
           <button class="tool icon-button active" data-tool="pen" title="Ручка — рисует только Apple Pencil" aria-label="Ручка">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l4.3-1 10.8-10.8a2.15 2.15 0 0 0 0-3L18.8 4.9a2.15 2.15 0 0 0-3 0L5 15.7 4 20Z"/><path d="m14.8 5.9 3.3 3.3"/></svg>
           </button>
@@ -45,6 +44,13 @@
           <button class="tool icon-button" data-tool="pan" title="Перемещение" aria-label="Перемещение">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.5 11V7.7a1.5 1.5 0 0 1 3 0V10"/><path d="M10.5 10V5.8a1.5 1.5 0 0 1 3 0V10"/><path d="M13.5 10V6.8a1.5 1.5 0 0 1 3 0v4.1"/><path d="M16.5 10.9V9.2a1.5 1.5 0 0 1 3 0v4.2c0 4.2-2.5 7.1-6.6 7.1h-1.1c-2.1 0-3.6-.8-4.8-2.4L4.4 14.6a1.6 1.6 0 0 1 2.4-2.1l1.4 1.3"/></svg>
           </button>
+          <button id="imageInsert" class="icon-button" title="Добавить изображение (можно также вставить или перетащить)" aria-label="Добавить изображение">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="9" r="1.5"/><path d="m4 17 4.5-4.5 3.5 3 2.5-2.5 5.5 5"/></svg>
+          </button>
+          <button id="deleteSelection" class="icon-button selection-action hidden" title="Удалить выделенное" aria-label="Удалить выделенное">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg>
+          </button>
+          <input id="imageInput" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple />
         </div>
 
         <div class="divider"></div>
@@ -54,7 +60,6 @@
             <span id="currentColorSwatch" class="current-color-swatch" style="--c:#111111"></span>
             <svg class="chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
           </button>
-
           <label class="width-control" title="Толщина линии">
             <span class="width-preview" aria-hidden="true"></span>
             <input id="width" type="range" min="1" max="18" step="1" value="4" aria-label="Толщина линии" />
@@ -79,11 +84,7 @@
         </div>
 
         <div class="divider"></div>
-
-        <div class="tool-section utility-tools">
-          <button id="exportPng" class="utility-button" title="Сохранить PNG">PNG</button>
-          <button id="clearBoard" class="utility-button danger" title="Очистить доску">Очистить</button>
-        </div>
+        <button id="moreTrigger" class="icon-button" title="Ещё" aria-label="Дополнительные действия" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></button>
       </div>
 
       <div id="colorPopover" class="board-popover color-popover hidden" role="dialog" aria-label="Выбор цвета">
@@ -101,6 +102,12 @@
         <label class="custom-color-row"><span>Свой цвет</span><input id="customColor" type="color" value="#111111" aria-label="Выбрать произвольный цвет" /></label>
       </div>
 
+      <div id="morePopover" class="board-popover action-popover hidden" role="menu" aria-label="Дополнительные действия">
+        <button id="exportPng" class="popover-action" role="menuitem">Сохранить текущий вид как PNG</button>
+        <button id="clearBoard" class="popover-action danger" role="menuitem">Очистить всю доску</button>
+      </div>
+
+      <div id="boardToast" class="board-toast hidden" role="status" aria-live="polite"></div>
       <div id="offlineBanner" class="offline-banner hidden">Соединение потеряно. Изменения будут отправлены после переподключения.</div>
     </main>
   </div>
