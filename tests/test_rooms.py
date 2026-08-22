@@ -21,6 +21,11 @@ def test_room_is_created_before_it_can_be_opened(tmp_path):
         snapshot = client.get(f"/api/boards/{room_id}")
         assert snapshot.status_code == 200
         assert snapshot.json()["board_id"] == room_id
+        assert snapshot.json()["objects"] == []
+
+        listed = client.get("/api/rooms")
+        assert listed.status_code == 200
+        assert listed.json()["rooms"][0]["room_id"] == room_id
 
 
 def test_created_room_ids_are_unique(tmp_path):
