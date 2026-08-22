@@ -2,8 +2,33 @@ import assert from "node:assert/strict";
 
 globalThis.HTMLInputElement = class HTMLInputElement {};
 globalThis.HTMLTextAreaElement = class HTMLTextAreaElement {};
+
+function fakeElement() {
+  const classes = new Set();
+  return {
+    style: {},
+    isConnected: true,
+    textContent: "",
+    innerHTML: "",
+    classList: {
+      add(...values) { values.forEach((value) => classes.add(value)); },
+      remove(...values) { values.forEach((value) => classes.delete(value)); },
+      contains(value) { return classes.has(value); },
+      toggle(value, force) {
+        if (force === undefined ? !classes.has(value) : force) classes.add(value);
+        else classes.delete(value);
+      },
+    },
+    setAttribute() {},
+    addEventListener() {},
+    querySelector() { return null; },
+    closest() { return null; },
+  };
+}
+
 globalThis.document = {
   addEventListener() {},
+  createElement() { return fakeElement(); },
 };
 
 const { SelectionController } = await import("../../src/local_board/web/assets/js/selection-controller.js");
@@ -13,6 +38,7 @@ function makeCanvas() {
   let captured = null;
   return {
     listeners,
+    parentElement: null,
     addEventListener(type, listener) {
       const values = listeners.get(type) || [];
       values.push(listener);
@@ -55,8 +81,10 @@ function makeRenderer() {
     worldToScreen(point) { return { ...point }; },
     setSelection(keys) { this.selection = new Set(keys); },
     setMarquee(value) { this.marquee = value; },
+    setCropOverlay() {},
     requestRender() {},
     invalidateBase() {},
+    cancelFollowAnimation() {},
   };
 }
 
@@ -92,10 +120,15 @@ function rightMouseEvent({ x, y, buttons = 2, pointerId = 7 }) {
   canvas.listeners.get("pointerdown")[0](down);
   assert.equal(down.prevented, true);
   assert.equal(down.stopped, true);
-  assert.equal(controller.mode, "marquee");
+  assert.equal(controller.mode, "pending-marquee");
+  assert.equal(renderer.marquee, null, "RMB down alone must not draw a selection rectangle");
   assert.equal(canvas.capturedPointer, 7);
 
+  controller.pointerMove(rightMouseEvent({ x: 3, y: 2, buttons: 2 }));
+  assert.equal(renderer.marquee, null, "tiny mouse jitter must stay below the marquee threshold");
+
   controller.pointerMove(rightMouseEvent({ x: 30, y: 30, buttons: 2 }));
+  assert.equal(controller.mode, "marquee");
   assert.notEqual(renderer.marquee, null);
 
   controller.pointerUp(rightMouseEvent({ x: 30, y: 30, buttons: 0 }));
@@ -117,14 +150,34 @@ function rightMouseEvent({ x, y, buttons = 2, pointerId = 7 }) {
   });
 
   canvas.listeners.get("pointerdown")[0](rightMouseEvent({ x: 0, y: 0, pointerId: 9 }));
+  assert.equal(controller.mode, "pending-marquee");
+
+  controller.pointerMove(rightMouseEvent({ x: 30, y: 30, buttons: 2, pointerId: 9 }));
   assert.equal(controller.mode, "marquee");
 
-  // Simulate WebKit/browser losing the explicit pointerup. A move with buttons=0
-  // must reconstruct the release and finish the selection instead of sticking.
+  // Simulate the browser losing the explicit pointerup after the drag started.
+  // buttons=0 must finalize instead of leaving a rectangle stuck to the cursor.
   controller.pointerMove(rightMouseEvent({ x: 30, y: 30, buttons: 0, pointerId: 9 }));
   assert.equal(controller.activePointerId, null);
   assert.equal(renderer.marquee, null);
   assert.deepEqual(controller.keys(), ["stroke:s1"]);
+}
+
+{
+  const canvas = makeCanvas();
+  const renderer = makeRenderer();
+  const controller = new SelectionController({
+    canvas,
+    state: makeState(),
+    renderer,
+    sendEvent() {},
+    clientId: "local",
+  });
+
+  canvas.listeners.get("pointerdown")[0](rightMouseEvent({ x: 5, y: 5, pointerId: 11 }));
+  controller.pointerUp(rightMouseEvent({ x: 5, y: 5, buttons: 0, pointerId: 11 }));
+  assert.equal(renderer.marquee, null, "a simple accidental RMB click must never create marquee UI");
+  assert.deepEqual(controller.keys(), [], "a simple RMB click must not change selection");
 }
 
 console.log("Selection controller tests passed");
