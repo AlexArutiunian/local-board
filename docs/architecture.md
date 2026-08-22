@@ -15,11 +15,12 @@ participant creates room
 → other participants open the same room
 → everyone connects to the same BoardRoom
 → Pencil stroke renders locally immediately
+→ stroke.begin includes the source viewport zoom
 → append points are batched for network transport
 → mutation travels over WebSocket
 → server applies authoritative state
 → other participants render it live
-→ passive viewers smoothly keep the active remote writer in view when needed
+→ passive viewers softly follow remote writing position/scale when needed
 → durable snapshot is persisted
 ```
 
@@ -72,13 +73,19 @@ A four-digit code is deliberately optimized for classroom UX, not security. It i
 - completed strokes are cached in a bitmap layer while only active strokes are repainted on realtime append frames;
 - outgoing `stroke.append` points are batched once per animation frame in bounded chunks and flushed before `stroke.end`;
 - realtime transport is downstream of local rendering and must never gate whether a Pencil contact is accepted;
-- viewport (`x/y/zoom`) remains local per browser and is never synchronized over the network;
-- `RemoteFollowController` derives the current remote writer position from normal `stroke.begin` / `stroke.append` events, so no separate camera protocol is required;
+- viewport (`x/y/zoom`) remains local per browser and is never synchronized as shared room state;
+- every new stroke may carry `source_zoom`: the writer's local zoom at stroke start. It is descriptive rendering metadata, not shared viewport state or authorization data;
+- `RemoteFollowController` derives the active remote writer position from normal `stroke.begin` / `stroke.append` events, so no separate camera-position protocol is required;
+- when source and viewer scales differ materially, the passive viewer can smoothly approach the writer's `source_zoom`, making handwriting appear closer to the size seen on the source device;
 - when the remote stroke head approaches or leaves a safe inset of the local viewport, only that viewer's camera pans smoothly enough to reveal additional writing space;
+- pan and zoom share one retargetable camera animator, so incoming packets update the destination instead of producing discrete camera jumps;
+- during camera animation the completed-ink bitmap is transformed cheaply and periodically refreshed instead of rebuilding every historical stroke every frame; the final frame is rebuilt sharply;
 - bottom safe inset is larger because the floating toolbar occupies visible canvas space;
 - local writing, pan, pinch, wheel, or deliberate toolbar/view interaction immediately cancels remote camera motion and pauses auto-follow for a short grace period;
 - auto-follow is role-neutral: any participant can become the active writer and any other passive participant can follow;
 - simultaneous writers do not make a viewer ping-pong on every packet: the current active stroke keeps focus until a new explicit `stroke.begin` or the previous writer becomes stale;
+- the controller remembers the latest writing point and its source scale from both local and remote ink; the explicit **⌖** action can smoothly return a participant to that location after manual navigation;
+- snapshots preserve `source_zoom`, so "go to last writing" can recover a useful scale after reconnect/reload for newly created strokes;
 - API requests use relative same-origin paths;
 - WebSocket derives `ws://` / `wss://` from `location.protocol`;
 - share links use `location.origin`, so no host/IP is hardcoded.
@@ -92,18 +99,19 @@ A four-digit code is deliberately optimized for classroom UX, not security. It i
 - each mutation has `op_id`;
 - sender receives `ack`;
 - server remembers recent `op_id` values and ignores retries, making reconnect resend idempotent;
-- completed mutations are persisted atomically.
+- completed mutations are persisted atomically;
+- optional `source_zoom` is normalized/clamped by the protocol and persisted with the stroke, but never controls permissions or server-side camera state.
 
 ## Realtime protocol
 
 Client mutations:
 
-- `stroke.begin`
-- `stroke.append`
-- `stroke.end`
-- `stroke.delete`
-- `stroke.restore`
-- `board.clear`
+- `stroke.begin` — includes stroke data and optional `source_zoom`;
+- `stroke.append`;
+- `stroke.end`;
+- `stroke.delete`;
+- `stroke.restore`;
+- `board.clear`.
 
 Server messages:
 
