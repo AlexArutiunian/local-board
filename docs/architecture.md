@@ -51,13 +51,17 @@ A four-digit code is deliberately optimized for classroom UX, not security. It i
 ### Frontend
 
 - native Canvas 2D + Pointer Events;
-- `pointerType === "pen"` is the only ink/eraser input path;
+- `PencilEngine` owns the ink contact state machine separately from touch/mouse navigation;
+- `pointerType === "pen"` is used to classify a new contact on `pointerdown`; after that, the tracked `pointerId` is authoritative for the lifetime of that contact;
+- a new Pencil `pointerdown` always wins: if WebKit left an older pen session stale, it is finalized immediately and the new stroke starts without an artificial waiting period;
+- Pencil does **not** use explicit `setPointerCapture()` / `releasePointerCapture()`; terminal events are observed at `window` level and the direct-manipulation pointer keeps normal implicit capture semantics;
+- if a terminal event is lost, a hover-like move with no buttons/pressure closes the stale Pencil session defensively;
+- no synchronous persistence (`localStorage`, file/network wait, etc.) is allowed in the Pencil down/move/up hot path;
 - touch/palm never creates ink;
 - while Pencil is active, touch/palm is ignored so the canvas does not move under the hand;
 - otherwise one finger pans and two fingers pinch-zoom;
 - Safari text selection, touch callout, drag and context-menu gestures are suppressed on the board surface;
-- unexpected pointer-capture loss finalizes/cleans the active Pencil state instead of leaving input stuck;
-- coalesced Pencil samples are applied to local state immediately;
+- coalesced Pencil samples are applied to local state immediately when the browser provides them;
 - rendering is scheduled at most once per animation frame;
 - outgoing `stroke.append` points are batched once per animation frame (bounded chunks) and flushed before `stroke.end`;
 - viewport (`x/y/zoom`) is local per browser and is never synchronized;
