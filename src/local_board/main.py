@@ -8,7 +8,14 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .ai_formula import DEFAULT_FORMULA_MODEL, FormulaRecognitionError, recognize_formula, validate_formula_image_data_url
+from .ai_formula import (
+    DEFAULT_FORMULA_MODEL,
+    FormulaNotFoundError,
+    FormulaProviderUnavailableError,
+    FormulaRecognitionError,
+    recognize_formula,
+    validate_formula_image_data_url,
+)
 from .config import SETTINGS, WEB_DIR
 from .protocol import ProtocolError, normalize_client_event, normalize_participant_profile
 from .room import RoomManager
@@ -99,6 +106,14 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         model = os.getenv("OPENROUTER_FORMULA_MODEL", DEFAULT_FORMULA_MODEL).strip() or DEFAULT_FORMULA_MODEL
         try:
             return await recognize_formula(image, api_key=api_key, model=model)
+        except FormulaNotFoundError as exc:
+            # The AI path is healthy; the crop simply did not contain a clear
+            # mathematical expression. This is a user-actionable result, not a
+            # gateway/server failure.
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except FormulaProviderUnavailableError as exc:
+            # Free OpenRouter providers can be temporarily saturated/offline.
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         except FormulaRecognitionError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
