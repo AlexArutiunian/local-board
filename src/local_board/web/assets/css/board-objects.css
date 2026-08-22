@@ -10,11 +10,95 @@
   border: 0 !important;
 }
 
+/* Legacy image-selection controls stay in the DOM for app.js compatibility,
+   but image-specific actions now live next to the selected image. */
+.primary-tools #cropSelection,
+.primary-tools #cropApply,
+.primary-tools #cropCancel,
+.primary-tools #deleteSelection {
+  display: none !important;
+}
+
 .selection-action { color: #b91c1c; }
 .selection-context { color: #1d4ed8; }
 .crop-action { border-color: #bfdbfe; background: #eff6ff; color: #1d4ed8; }
 #cropApply { border-color: #bbf7d0; background: #f0fdf4; color: #15803d; }
 #cropCancel { border-color: #e7e5e4; background: #fafaf9; color: #57534e; }
+
+.image-context-bar {
+  position: absolute;
+  z-index: 18;
+  transform: translateX(-50%);
+  max-width: calc(100% - 20px);
+  padding: 5px;
+  border: 1px solid rgba(214,211,209,.9);
+  border-radius: 13px;
+  background: rgba(255,255,255,.96);
+  box-shadow: 0 12px 32px rgba(28,25,23,.14), 0 2px 7px rgba(28,25,23,.06);
+  backdrop-filter: blur(20px) saturate(1.1);
+  -webkit-backdrop-filter: blur(20px) saturate(1.1);
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation;
+}
+
+.image-context-normal,
+.image-context-crop {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  max-width: calc(100vw - 32px);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.image-context-normal::-webkit-scrollbar,
+.image-context-crop::-webkit-scrollbar { display: none; }
+
+.image-context-bar button {
+  min-width: auto;
+  height: 32px;
+  padding: 0 9px;
+  border-color: transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: #44403c;
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+  box-shadow: none;
+}
+.image-context-bar button:hover {
+  border-color: transparent;
+  background: #f5f5f4;
+}
+.image-context-bar button:active { transform: scale(.97); }
+.image-context-bar .image-context-icon {
+  width: 32px;
+  min-width: 32px;
+  padding: 0;
+  font-size: 15px;
+}
+.image-context-bar .danger { color: #b91c1c; }
+.image-context-bar .danger:hover { background: #fff1f2; }
+.image-context-bar .primary-action {
+  background: #1c1917;
+  color: #fff;
+}
+.image-context-bar .primary-action:hover { background: #292524; }
+.image-context-separator {
+  width: 1px;
+  height: 20px;
+  margin: 0 2px;
+  flex: 0 0 auto;
+  background: #e7e5e4;
+}
+.image-context-label {
+  padding: 0 7px;
+  color: #78716c;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
 
 .action-popover {
   width: 236px;
@@ -82,4 +166,6 @@
 @media (max-width: 720px) {
   .action-popover { width: 220px; }
   .drawing-controls { gap: 4px; }
+  .image-context-bar { padding: 4px; border-radius: 12px; }
+  .image-context-bar button { height: 34px; padding: 0 8px; }
 }
