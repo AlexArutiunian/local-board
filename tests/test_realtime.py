@@ -143,6 +143,59 @@ def test_image_object_crop_syncs_and_survives_snapshot(tmp_path):
                 assert image["crop_height"] == 0.75
 
 
+def test_image_reorder_is_broadcast_and_persisted(tmp_path):
+    app = create_app(tmp_path)
+
+    with TestClient(app) as client:
+        room_id = client.post("/api/rooms").json()["room_id"]
+        socket_path = f"/ws/{room_id}"
+
+        def image_event(image_id, asset_char, op_id):
+            return {
+                "type": "object.create",
+                "op_id": op_id,
+                "object": {
+                    "id": image_id,
+                    "kind": "image",
+                    "x": 0,
+                    "y": 0,
+                    "width": 100,
+                    "height": 100,
+                    "src": f"/api/boards/{room_id}/assets/{asset_char * 32}.png",
+                    "name": f"{image_id}.png",
+                },
+            }
+
+        with client.websocket_connect(f"{socket_path}?client_id=a") as a:
+            receive_type(a, "snapshot")
+            with client.websocket_connect(f"{socket_path}?client_id=b") as b:
+                receive_type(b, "snapshot")
+                receive_type(a, "presence")
+
+                a.send_json(image_event("img-1", "a", "create-1"))
+                receive_type(a, "ack", op_id="create-1")
+                receive_type(b, "event")
+
+                a.send_json(image_event("img-2", "b", "create-2"))
+                receive_type(a, "ack", op_id="create-2")
+                receive_type(b, "event")
+
+                reorder = {
+                    "type": "object.reorder",
+                    "op_id": "front-1",
+                    "object_id": "img-1",
+                    "position": "front",
+                }
+                a.send_json(reorder)
+                receive_type(a, "ack", op_id="front-1")
+                remote = receive_type(b, "event")["event"]
+                assert remote == reorder
+
+        with client.websocket_connect(f"{socket_path}?client_id=c") as c:
+            snapshot = receive_type(c, "snapshot")["board"]
+            assert [item["id"] for item in snapshot["objects"]] == ["img-2", "img-1"]
+
+
 def test_stroke_translation_is_broadcast_and_persisted(tmp_path):
     app = create_app(tmp_path)
     with TestClient(app) as client:
