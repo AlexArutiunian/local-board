@@ -1,28 +1,24 @@
 const DEFAULT_IDLE_GRACE_MS = 1400;
 const ACTIVE_WRITER_STALE_MS = 900;
-const AUTO_FOLLOW_TIME_CONSTANT_MS = 420;
-const GO_TO_LAST_TIME_CONSTANT_MS = 480;
+const AUTO_FOLLOW_TIME_CONSTANT_MS = 560;
+const GO_TO_LAST_TIME_CONSTANT_MS = 520;
+const FOLLOW_PREF_KEY = "local-board:auto-follow";
+const SCALE_PREF_KEY = "local-board:auto-scale";
 
-/**
- * Role-neutral camera assistance for collaborative writing.
- *
- * - Remote active ink can softly pull a passive viewer toward the writing head.
- * - The writer's source zoom is used when the visual scale differs materially.
- * - Any local interaction temporarily wins over automatic following.
- * - The last written position is remembered for an explicit "go to last" action.
- */
+/** Role-neutral camera assistance for collaborative writing. */
 export class RemoteFollowController {
   constructor({ renderer, localClientId, idleGraceMs = DEFAULT_IDLE_GRACE_MS }) {
     this.renderer = renderer;
     this.localClientId = localClientId;
     this.idleGraceMs = idleGraceMs;
     this.pausedUntil = 0;
+    this.autoFollowEnabled = readPreference(FOLLOW_PREF_KEY, true);
+    this.autoScaleEnabled = readPreference(SCALE_PREF_KEY, true);
 
     this.activeActorId = null;
     this.activeStrokeId = null;
     this.activeSourceZoom = null;
     this.activeSeenAt = 0;
-
     this.localStrokeId = null;
     this.localSourceZoom = null;
 
@@ -32,40 +28,41 @@ export class RemoteFollowController {
     this.lastWrittenActorId = null;
   }
 
+  setAutoFollowEnabled(enabled) {
+    this.autoFollowEnabled = Boolean(enabled);
+    writePreference(FOLLOW_PREF_KEY, this.autoFollowEnabled);
+    if (!this.autoFollowEnabled) this.renderer.cancelFollowAnimation?.();
+    return this.autoFollowEnabled;
+  }
+
+  setAutoScaleEnabled(enabled) {
+    this.autoScaleEnabled = Boolean(enabled);
+    writePreference(SCALE_PREF_KEY, this.autoScaleEnabled);
+    return this.autoScaleEnabled;
+  }
+
+  toggleAutoFollow() { return this.setAutoFollowEnabled(!this.autoFollowEnabled); }
+  toggleAutoScale() { return this.setAutoScaleEnabled(!this.autoScaleEnabled); }
+
   noteLocalInteraction(now = performance.now()) {
     this.pausedUntil = Math.max(this.pausedUntil, now + this.idleGraceMs);
     this.renderer.cancelFollowAnimation?.();
   }
 
-  isPaused(now = performance.now()) {
-    return now < this.pausedUntil;
-  }
+  isPaused(now = performance.now()) { return now < this.pausedUntil; }
 
-  observeLocal(event, now = performance.now()) {
+  observeLocal(event) {
     if (!event) return;
-
     if (event.type === "stroke.begin") {
       this.localStrokeId = event.stroke?.id || null;
       this.localSourceZoom = normalizeZoom(event.stroke?.source_zoom) ?? this.renderer.view.zoom;
-      this.remember(
-        lastPoint(event.stroke?.points),
-        this.localSourceZoom,
-        this.localStrokeId,
-        this.localClientId,
-      );
+      this.remember(lastPoint(event.stroke?.points), this.localSourceZoom, this.localStrokeId, this.localClientId);
       return;
     }
-
     if (event.type === "stroke.append" && event.stroke_id === this.localStrokeId) {
-      this.remember(
-        lastPoint(event.points),
-        this.localSourceZoom,
-        event.stroke_id,
-        this.localClientId,
-      );
+      this.remember(lastPoint(event.points), this.localSourceZoom, event.stroke_id, this.localClientId);
       return;
     }
-
     if (event.type === "stroke.end" && event.stroke_id === this.localStrokeId) {
       this.localStrokeId = null;
       this.localSourceZoom = null;
@@ -88,14 +85,10 @@ export class RemoteFollowController {
     }
 
     if (event.type === "stroke.append") {
-      const sameStroke = this.activeActorId === actorId
-        && this.activeStrokeId === event.stroke_id;
+      const sameStroke = this.activeActorId === actorId && this.activeStrokeId === event.stroke_id;
       const previousWriterIsStale = now - this.activeSeenAt > ACTIVE_WRITER_STALE_MS;
       if (!sameStroke && !previousWriterIsStale) return false;
-
-      if (!sameStroke) {
-        this.activeSourceZoom = null;
-      }
+      if (!sameStroke) this.activeSourceZoom = null;
       this.activeActorId = actorId;
       this.activeStrokeId = event.stroke_id || null;
       this.activeSeenAt = now;
@@ -105,9 +98,7 @@ export class RemoteFollowController {
     }
 
     if (event.type === "stroke.end") {
-      if (this.activeActorId === actorId && this.activeStrokeId === event.stroke_id) {
-        this.activeSeenAt = now;
-      }
+      if (this.activeActorId === actorId && this.activeStrokeId === event.stroke_id) this.activeSeenAt = now;
       return false;
     }
 
@@ -128,26 +119,21 @@ export class RemoteFollowController {
       const stroke = strokes[index];
       const point = lastPoint(stroke?.points);
       if (!point) continue;
-      this.remember(
-        point,
-        normalizeZoom(stroke.source_zoom),
-        stroke.id || null,
-        stroke.author_id || null,
-      );
+      this.remember(point, normalizeZoom(stroke.source_zoom), stroke.id || null, stroke.author_id || null);
       return true;
     }
     return false;
   }
 
-  hasLastWritten() {
-    return Boolean(this.lastWrittenPoint);
-  }
+  hasLastWritten() { return Boolean(this.lastWrittenPoint); }
 
   goToLastWritten() {
     if (!this.lastWrittenPoint) return false;
     this.pausedUntil = 0;
     const { width, height } = this.renderer.getViewportSize();
-    const zoom = this.lastWrittenZoom ?? this.renderer.view.zoom;
+    const zoom = this.autoScaleEnabled
+      ? (this.lastWrittenZoom ?? this.renderer.view.zoom)
+      : this.renderer.view.zoom;
     return this.renderer.smoothFocusWorldPoint(this.lastWrittenPoint, {
       zoom,
       screenX: width * 0.52,
@@ -162,14 +148,16 @@ export class RemoteFollowController {
     const screenPoint = this.renderer.worldToScreen(point);
     const { width, height } = this.renderer.getViewportSize();
     const delta = computeFollowDelta({ point: screenPoint, width, height });
-    const targetZoom = matchedSourceZoom(this.renderer.view.zoom, sourceZoom);
-    const scaleNeeded = Math.abs(Math.log(targetZoom / this.renderer.view.zoom)) > 0.04;
-    if (!delta.needed && !scaleNeeded) return false;
+    const targetZoom = this.autoScaleEnabled
+      ? matchedSourceZoom(this.renderer.view.zoom, sourceZoom)
+      : this.renderer.view.zoom;
+    const scaleNeeded = this.autoScaleEnabled
+      && Math.abs(Math.log(targetZoom / this.renderer.view.zoom)) > 0.04;
+    const panNeeded = this.autoFollowEnabled && delta.needed;
+    if (!panNeeded && !scaleNeeded) return false;
 
-    // When only scale changes, keep the writing head visually where it already is.
-    // When it approaches an edge, move it only far enough to create writing room.
-    const desiredX = screenPoint.x + delta.dx;
-    const desiredY = screenPoint.y + delta.dy;
+    const desiredX = panNeeded ? screenPoint.x + delta.dx : screenPoint.x;
+    const desiredY = panNeeded ? screenPoint.y + delta.dy : screenPoint.y;
     return this.renderer.smoothFocusWorldPoint(point, {
       zoom: targetZoom,
       screenX: desiredX,
@@ -196,34 +184,20 @@ export class RemoteFollowController {
 
 export function computeFollowDelta({ point, width, height }) {
   if (!point || width <= 0 || height <= 0) return { dx: 0, dy: 0, needed: false };
-
-  // Start moving before the writing head hits the literal viewport edge, but do
-  // not recenter it aggressively. The lower guard accounts for the toolbar.
   const leftGuard = clamp(width * 0.14, 64, 150);
   const rightGuard = clamp(width * 0.14, 64, 150);
   const topGuard = clamp(height * 0.12, 56, 120);
   const bottomGuard = clamp(height * 0.20, 96, 180);
-
   const safeLeft = leftGuard;
   const safeRight = width - rightGuard;
   const safeTop = topGuard;
   const safeBottom = height - bottomGuard;
-
   let dx = 0;
   let dy = 0;
-
-  if (point.x < safeLeft) {
-    dx = width * 0.22 - point.x;
-  } else if (point.x > safeRight) {
-    dx = width * 0.78 - point.x;
-  }
-
-  if (point.y < safeTop) {
-    dy = height * 0.24 - point.y;
-  } else if (point.y > safeBottom) {
-    dy = height * 0.72 - point.y;
-  }
-
+  if (point.x < safeLeft) dx = width * 0.22 - point.x;
+  else if (point.x > safeRight) dx = width * 0.78 - point.x;
+  if (point.y < safeTop) dy = height * 0.24 - point.y;
+  else if (point.y > safeBottom) dy = height * 0.72 - point.y;
   return { dx, dy, needed: Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5 };
 }
 
@@ -231,12 +205,22 @@ export function matchedSourceZoom(currentZoom, sourceZoom) {
   const current = clamp(Number(currentZoom) || 1, 0.2, 5);
   const source = normalizeZoom(sourceZoom);
   if (source === null) return current;
-
-  // Avoid tiny distracting zoom corrections. If the writing is materially
-  // different in apparent size, match the source exactly and do it smoothly.
   const ratio = source / current;
   if (ratio > 0.88 && ratio < 1.14) return current;
   return source;
+}
+
+function readPreference(key, fallback) {
+  try {
+    const value = localStorage.getItem(key);
+    return value === null ? fallback : value === "1";
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function writePreference(key, value) {
+  try { localStorage.setItem(key, value ? "1" : "0"); } catch (_) {}
 }
 
 function normalizeZoom(value) {
@@ -249,6 +233,4 @@ function lastPoint(points) {
   return Array.isArray(points) && points.length ? points[points.length - 1] : null;
 }
 
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
+function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
