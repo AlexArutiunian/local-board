@@ -30,5 +30,8 @@ jobs:
             node --check "$file"
           done
 
-      - name: Pencil engine tests
-        run: node --experimental-default-type=module tests/js/test-pencil-engine.mjs
+      - name: JavaScript unit tests
+        run: |
+          for file in tests/js/*.mjs; do
+            node --experimental-default-type=module "$file"
+          done
