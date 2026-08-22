@@ -112,7 +112,10 @@ export class BoardState {
   updateObject(id, patch, touchGeneration = true) {
     const object = this.objects.get(id);
     if (!object) return false;
-    for (const key of ["x", "y", "width", "height"]) {
+    for (const key of [
+      "x", "y", "width", "height",
+      "crop_x", "crop_y", "crop_width", "crop_height",
+    ]) {
       if (patch?.[key] !== undefined && Number.isFinite(Number(patch[key]))) object[key] = Number(patch[key]);
     }
     if (touchGeneration) this.baseGeneration += 1;
@@ -157,5 +160,19 @@ export function cloneBoardObject(object) {
     height: Number(object.height || 240),
     src: String(object.src || ""),
     name: String(object.name || "image"),
+    crop_x: clamp01(Number(object.crop_x ?? 0)),
+    crop_y: clamp01(Number(object.crop_y ?? 0)),
+    crop_width: clamp01Positive(Number(object.crop_width ?? 1)),
+    crop_height: clamp01Positive(Number(object.crop_height ?? 1)),
   };
+}
+
+function clamp01(value) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
+}
+
+function clamp01Positive(value) {
+  if (!Number.isFinite(value)) return 1;
+  return Math.max(0.01, Math.min(1, value));
 }
