@@ -75,12 +75,14 @@ export function clonePoint(point) {
 }
 
 export function cloneStroke(stroke) {
+  const sourceZoom = Number(stroke.source_zoom);
   return {
     id: String(stroke.id),
     author_id: stroke.author_id ? String(stroke.author_id) : undefined,
     color: String(stroke.color || "#111111"),
     width: Number(stroke.width || 4),
     pointer_type: String(stroke.pointer_type || "pen"),
+    source_zoom: Number.isFinite(sourceZoom) ? sourceZoom : undefined,
     points: (stroke.points || []).map(clonePoint),
     complete: Boolean(stroke.complete),
   };
