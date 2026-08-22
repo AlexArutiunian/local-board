@@ -77,6 +77,9 @@ export class AssetController {
       this.selection.selectOnly(key);
       this.renderer.invalidateBase();
       this.renderer.requestRender();
+      // Selecting the new image exposes its object controls, but deliberately
+      // does not switch the active drawing tool. On iPad this lets a finger edit
+      // the image while Apple Pencil remains ready to write immediately.
       this.onInserted?.(key);
       this.onStatus?.("Изображение добавлено", "success");
       return true;
