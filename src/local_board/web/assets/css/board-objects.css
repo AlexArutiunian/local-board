@@ -65,6 +65,17 @@
 }
 .image-context-bar .danger { color: #b91c1c; }
 .image-context-bar .danger:hover { background: #fff1f2; }
+.image-context-bar [data-image-action="delete"] {
+  width: auto;
+  min-width: auto;
+  padding: 0 9px;
+  font-size: 0;
+}
+.image-context-bar [data-image-action="delete"]::after {
+  content: "Удалить";
+  font-size: 11px;
+  font-weight: 700;
+}
 .image-context-bar .primary-action {
   background: #1c1917;
   color: #fff;
