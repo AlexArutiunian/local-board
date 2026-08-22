@@ -10,6 +10,7 @@ export class LocalHistoryController {
     this.undoStack = [];
     this.redoStack = [];
     this.pendingGroup = null;
+    globalThis.__localBoardHistory = this;
   }
 
   canUndo() { return this.undoStack.length > 0; }
