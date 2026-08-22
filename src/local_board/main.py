@@ -15,7 +15,7 @@ from .storage import JsonBoardStore, validate_board_id
 
 
 def create_app(data_dir: Path | None = None) -> FastAPI:
-    app = FastAPI(title="Local Board", version="0.3.0")
+    app = FastAPI(title="Local Board", version="0.4.0")
     store = JsonBoardStore(data_dir or SETTINGS.data_dir)
     rooms = RoomManager(store)
     room_service = RoomService(store)
@@ -32,6 +32,10 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
     @app.get("/")
     async def home() -> FileResponse:
         return FileResponse(WEB_DIR / "home.html")
+
+    @app.get("/api/rooms")
+    async def list_rooms() -> dict[str, list[dict]]:
+        return {"rooms": store.list_boards()}
 
     @app.post("/api/rooms", status_code=201)
     async def create_room() -> dict[str, str]:
