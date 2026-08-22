@@ -1,3 +1,5 @@
+import "./selection-productivity-bootstrap.js";
+
 const boundRoots = new WeakSet();
 
 export function bindPenUiControls(root = document) {
