@@ -2,6 +2,7 @@ import json
 
 from fastapi.testclient import TestClient
 
+from local_board.activity import decode_stroke_path
 from local_board.main import create_app
 
 
@@ -85,6 +86,11 @@ def test_activity_log_records_role_and_compacts_stroke_packets(tmp_path):
     assert stroke["bbox"] == [10.0, 18.0, 19.0, 26.0]
     assert stroke["t0"] <= stroke["t"]
     assert stroke["ms"] >= 0
+    assert decode_stroke_path(stroke["path_z"]) == [
+        {"x": 10.0, "y": 20.0},
+        {"x": 14.0, "y": 26.0},
+        {"x": 19.0, "y": 18.0},
+    ]
 
     student_join = next(
         record for record in records
