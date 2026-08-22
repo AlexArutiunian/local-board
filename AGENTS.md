@@ -131,6 +131,7 @@ Viewport (`pan/zoom`) по умолчанию является локальны�
 - `pointerType === "pen"` — основной путь рукописного ввода;
 - использовать pressure, когда он доступен, но иметь нормальный fallback;
 - touch на canvas по умолчанию нужен для pan/pinch, чтобы палец не оставлял случайные чернила;
+- в явном Select один палец и Pencil являются selection pointers, но второй палец всегда должен выигрывать и переходить в pinch/pan;
 - не допускать browser scroll/zoom жестов поверх рабочего canvas;
 - controls должны иметь touch-friendly hit area;
 - toolbar не должен перекрывать критическую часть canvas на iPad.
@@ -166,6 +167,8 @@ Viewport (`pan/zoom`) по умолчанию является локальны�
 **Не копировать AGPL/GPL/copyleft whiteboard-код в этот проект без явного решения владельца проекта.** Изучать архитектурные идеи и независимо реализовывать общий паттерн можно.
 
 Для этого проекта не использовать Gradio/Streamlit как оболочку canvas: они не решают core interaction model и создают ненужный framework shell.
+
+MathJax допустим как внешняя runtime-зависимость для TeX→SVG: лицензия Apache-2.0. Не копировать его исходники в проект без необходимости; текущий AI formula path лениво загружает официальный distribution через CDN.
 
 ## 9. UI без чужого branding
 
@@ -273,3 +276,21 @@ README должен описывать **текущий** способ запу�
 - tests/syntax checks пройдены.
 
 Git хранит историю. Репозиторий должен хранить **текущую архитектуру**, а не кладбище прошлых попыток.
+
+## 16. AI integrations и секреты
+
+Внешний AI — вспомогательный сервис, а не источник authoritative board state.
+
+Для OpenRouter/других провайдеров:
+
+- API keys живут только на backend в environment / gitignored `.env`;
+- **никогда** не вставлять ключ в frontend JS, query string, board JSON, WebSocket event или activity log;
+- browser обращается только к same-origin Local Board endpoint;
+- наружу отправлять минимально необходимый фрагмент данных, а не весь холст;
+- ограничивать размер входного payload;
+- ошибки провайдера превращать в controlled HTTP/UI error, не удаляя исходный пользовательский контент;
+- AI-result становится shared state только через существующую validated semantic mutation;
+- для публичного deployment AI endpoint обязан получить rate limiting и реальную owner/invite authorization, потому что current role labels не являются security boundary;
+- в README явно указывать, когда выбранные пользовательские данные уходят внешнему провайдеру.
+
+Текущий formula pipeline сохраняет этот принцип: selection → локальный crop → backend OpenRouter OCR → LaTeX → MathJax render → обычный image asset/object.
