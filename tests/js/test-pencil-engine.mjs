@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { PencilEngine } from "../../src/local_board/web/assets/js/pencil-engine.js";
+import { PencilEngine, isContactEvent } from "../../src/local_board/web/assets/js/pencil-engine.js";
 
 class FakeState {
   constructor() {
@@ -45,7 +45,7 @@ function makeHarness() {
     renderer,
     clientId: "test-client",
     sendEvent: (event) => sent.push(event),
-    onStrokeFinished: (stroke) => finished.push(stroke),
+    onStrokeFinished: (strokeId) => finished.push(strokeId),
     scheduleFrame: (callback) => {
       const handle = nextHandle++;
       scheduled.set(handle, callback);
@@ -85,8 +85,7 @@ function penEvent(pointerId, x = 10, y = 20, { pressure = 0.6, buttons = 1, samp
   const { engine, sent, finished } = makeHarness();
   engine.begin(penEvent(10), { color: "#111111", width: 4 });
 
-  // Simulate WebKit losing the terminal event: a new pointerdown must close the
-  // stale stroke rather than reject or delay the fresh contact.
+  // Missing previous pointerup must never block a fresh contact.
   engine.begin(penEvent(11, 50, 60), { color: "#111111", width: 4 });
 
   assert.equal(engine.ownsPointer(11), true);
@@ -98,8 +97,7 @@ function penEvent(pointerId, x = 10, y = 20, { pressure = 0.6, buttons = 1, samp
   const { engine, sent } = makeHarness();
   engine.begin(penEvent(21), { color: "#111111", width: 4 });
 
-  // If pointerup/cancel disappears, the first hover-like move (no button and no
-  // pressure) must close the contact and prevent a permanently stuck pen state.
+  // Hover/no-contact state reconstructs a missing pointerup.
   engine.move(penEvent(21, 15, 25, { pressure: 0, buttons: 0 }));
 
   assert.equal(engine.isActive(), false);
@@ -123,6 +121,39 @@ function penEvent(pointerId, x = 10, y = 20, { pressure = 0.6, buttons = 1, samp
 
   for (const callback of [...scheduled.values()]) callback();
   assert.equal(sent.filter((event) => event.type === "stroke.append").length, 1);
+}
+
+{
+  const { engine, state, sent } = makeHarness();
+  const recoveryMove = penEvent(77, 40, 50, {
+    samples: [
+      penEvent(77, 38, 48),
+      penEvent(77, 39, 49),
+      penEvent(77, 40, 50),
+    ],
+  });
+
+  // Core regression: even with no pointerdown at all, a contact-bearing pen move
+  // must establish a stroke instead of being ignored until the next attempt.
+  assert.equal(isContactEvent(recoveryMove), true);
+  engine.recover(recoveryMove, { color: "#111111", width: 4 });
+
+  assert.equal(engine.ownsPointer(77), true);
+  const stroke = [...state.strokes.values()][0];
+  assert.equal(stroke.points.length, 3);
+  assert.equal(sent[0].type, "stroke.begin");
+}
+
+{
+  const { engine, finished } = makeHarness();
+  const touchKey = "stylus-touch:5";
+  engine.recover(
+    { pointerId: touchKey, clientX: 10, clientY: 10, force: 0.7, buttons: 1 },
+    { color: "#111111", width: 4 },
+  );
+  assert.equal(engine.ownsPointer(touchKey), true, "TouchEvent stylus fallback must be accepted");
+  engine.end(touchKey);
+  assert.equal(finished.length, 1);
 }
 
 console.log("Pencil engine tests passed");
