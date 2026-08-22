@@ -33,8 +33,6 @@ if (!InputController.prototype.__selectionProductivityBootstrap) {
       showToast: showBoardToast,
     });
 
-    // Select promotes a second finger to navigation. Keep that state clean and
-    // make two-finger navigation a true pan+pinch gesture.
     installTouchNavigation(this);
     installSelectionEndRecovery(this, productivity, interaction);
 
@@ -75,9 +73,6 @@ function installAreaFormulaButton(selection, formulaTransform) {
   });
 }
 
-// Safari/iPad can occasionally transition Pencil from contact to hover without
-// delivering pointerup. Treat no-contact hover or lost capture as release so the
-// one state machine still commits the same click/area action.
 function installSelectionEndRecovery(input, productivity, interaction) {
   const selection = input.selection;
   const canvas = input.canvas;
@@ -125,8 +120,9 @@ function installSelectionEndRecovery(input, productivity, interaction) {
     try {
       selection.pointerUp(event);
       if (input.selectionTouchPointerId === event.pointerId) input.clearSelectionTouchTracking?.();
-      interaction?.sync?.();
+      // Generic group UI updates first. Area interaction then wins and hides it.
       productivity?.sync?.();
+      interaction?.sync?.();
     } finally {
       finishing = false;
       lastPoint = null;
