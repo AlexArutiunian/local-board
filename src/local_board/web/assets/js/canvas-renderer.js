@@ -7,6 +7,7 @@ export class CanvasRenderer {
     this.view = this.loadView(boardId);
     this.boardId = boardId;
     this.renderHandle = null;
+    this.onViewChange = null;
 
     this.baseCanvas = document.createElement("canvas");
     this.baseCtx = this.baseCanvas.getContext("2d");
@@ -14,9 +15,6 @@ export class CanvasRenderer {
     this.cachedBaseGeneration = -1;
     this.cachedBaseView = null;
 
-    // One camera animator handles automatic following and explicit navigation.
-    // During animation the completed-ink bitmap is transformed cheaply instead
-    // of being rebuilt on every frame; the final frame is rebuilt sharply.
     this.followHandle = null;
     this.followTarget = null;
     this.followLastTimestamp = null;
@@ -26,6 +24,15 @@ export class CanvasRenderer {
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(canvas.parentElement);
     this.resize();
+  }
+
+  setViewChangeListener(listener) {
+    this.onViewChange = typeof listener === "function" ? listener : null;
+    this.emitViewChange();
+  }
+
+  emitViewChange() {
+    this.onViewChange?.({ ...this.view });
   }
 
   loadView(boardId) {
@@ -52,7 +59,6 @@ export class CanvasRenderer {
     this.dpr = Math.max(1, window.devicePixelRatio || 1);
     const pixelWidth = Math.max(1, Math.round(rect.width * this.dpr));
     const pixelHeight = Math.max(1, Math.round(rect.height * this.dpr));
-
     this.canvas.width = pixelWidth;
     this.canvas.height = pixelHeight;
     this.baseCanvas.width = pixelWidth;
@@ -61,18 +67,14 @@ export class CanvasRenderer {
     this.canvas.style.height = `${rect.height}px`;
     this.invalidateBase();
     this.render();
+    this.emitViewChange();
   }
 
   getViewportSize() {
-    return {
-      width: this.canvas.width / this.dpr,
-      height: this.canvas.height / this.dpr,
-    };
+    return { width: this.canvas.width / this.dpr, height: this.canvas.height / this.dpr };
   }
 
-  invalidateBase() {
-    this.baseDirty = true;
-  }
+  invalidateBase() { this.baseDirty = true; }
 
   requestRender() {
     if (this.renderHandle !== null) return;
@@ -83,12 +85,8 @@ export class CanvasRenderer {
   }
 
   render() {
-    if (this.cachedBaseGeneration !== this.state.baseGeneration) {
-      this.baseDirty = true;
-    }
-    if (!this.baseDirty && this.shouldRefreshTransformedBase()) {
-      this.baseDirty = true;
-    }
+    if (this.cachedBaseGeneration !== this.state.baseGeneration) this.baseDirty = true;
+    if (!this.baseDirty && this.shouldRefreshTransformedBase()) this.baseDirty = true;
     if (this.baseDirty) this.rebuildBase();
 
     const ctx = this.ctx;
@@ -98,7 +96,6 @@ export class CanvasRenderer {
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     this.drawCachedBase(ctx);
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-
     for (const stroke of this.state.listStrokes()) {
       if (!stroke.complete) this.drawStrokeTo(ctx, stroke);
     }
@@ -109,11 +106,9 @@ export class CanvasRenderer {
       ctx.drawImage(this.baseCanvas, 0, 0);
       return;
     }
-
     const ratio = this.view.zoom / this.cachedBaseView.zoom;
     const translateX = (this.view.x - this.cachedBaseView.x * ratio) * this.dpr;
     const translateY = (this.view.y - this.cachedBaseView.y * ratio) * this.dpr;
-
     ctx.save();
     ctx.setTransform(ratio, 0, 0, ratio, translateX, translateY);
     ctx.drawImage(this.baseCanvas, 0, 0);
@@ -126,24 +121,16 @@ export class CanvasRenderer {
     const { width, height } = this.getViewportSize();
     const shiftX = this.view.x - this.cachedBaseView.x * ratio;
     const shiftY = this.view.y - this.cachedBaseView.y * ratio;
-
-    // Refresh occasionally during a large trip so newly revealed areas do not
-    // stay outside the cached bitmap, while still avoiding per-frame rebuilds.
-    return ratio < 0.72
-      || ratio > 1.38
-      || Math.abs(shiftX) > width * 0.20
-      || Math.abs(shiftY) > height * 0.20;
+    return ratio < 0.72 || ratio > 1.38 || Math.abs(shiftX) > width * 0.20 || Math.abs(shiftY) > height * 0.20;
   }
 
   rebuildBase() {
     const width = this.canvas.width / this.dpr;
     const height = this.canvas.height / this.dpr;
     const ctx = this.baseCtx;
-
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, this.baseCanvas.width, this.baseCanvas.height);
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-
     this.drawGridTo(ctx, width, height);
     for (const stroke of this.state.listStrokes()) {
       if (stroke.complete) this.drawStrokeTo(ctx, stroke);
@@ -157,7 +144,6 @@ export class CanvasRenderer {
     ctx.save();
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, width, height);
-
     const spacing = 28 * this.view.zoom;
     if (spacing >= 10) {
       const startX = ((this.view.x % spacing) + spacing) % spacing;
@@ -178,19 +164,14 @@ export class CanvasRenderer {
   drawStrokeTo(ctx, stroke) {
     const points = stroke.points || [];
     if (!points.length) return;
-
     ctx.save();
     ctx.strokeStyle = stroke.color;
     ctx.fillStyle = stroke.color;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
-
     const pressure = averagePressure(points);
-    const pressureFactor = stroke.pointer_type === "pen"
-      ? clamp(0.68 + pressure * 0.75, 0.72, 1.25)
-      : 1;
+    const pressureFactor = stroke.pointer_type === "pen" ? clamp(0.68 + pressure * 0.75, 0.72, 1.25) : 1;
     const width = Math.max(1, stroke.width * this.view.zoom * pressureFactor);
-
     if (points.length === 1) {
       const p = this.worldToScreen(points[0]);
       ctx.beginPath();
@@ -199,7 +180,6 @@ export class CanvasRenderer {
       ctx.restore();
       return;
     }
-
     const first = this.worldToScreen(points[0]);
     ctx.beginPath();
     ctx.moveTo(first.x, first.y);
@@ -219,60 +199,35 @@ export class CanvasRenderer {
     const rect = this.canvas.getBoundingClientRect();
     const x = clientX - rect.left;
     const y = clientY - rect.top;
-    return {
-      x: (x - this.view.x) / this.view.zoom,
-      y: (y - this.view.y) / this.view.zoom,
-    };
+    return { x: (x - this.view.x) / this.view.zoom, y: (y - this.view.y) / this.view.zoom };
   }
 
   worldToScreen(point) {
-    return {
-      x: point.x * this.view.zoom + this.view.x,
-      y: point.y * this.view.zoom + this.view.y,
-    };
+    return { x: point.x * this.view.zoom + this.view.x, y: point.y * this.view.zoom + this.view.y };
   }
 
   smoothPanBy(dx, dy, { timeConstant = 340 } = {}) {
     if (!Number.isFinite(dx) || !Number.isFinite(dy)) return false;
     if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return false;
-    return this.smoothViewTo({
-      x: this.view.x + dx,
-      y: this.view.y + dy,
-      zoom: this.view.zoom,
-    }, { timeConstant });
+    return this.smoothViewTo({ x: this.view.x + dx, y: this.view.y + dy, zoom: this.view.zoom }, { timeConstant });
   }
 
-  smoothFocusWorldPoint(point, {
-    zoom = this.view.zoom,
-    screenX = null,
-    screenY = null,
-    timeConstant = 340,
-  } = {}) {
+  smoothFocusWorldPoint(point, { zoom = this.view.zoom, screenX = null, screenY = null, timeConstant = 340 } = {}) {
     if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return false;
     const { width, height } = this.getViewportSize();
     const targetZoom = clamp(Number(zoom) || this.view.zoom, 0.2, 5);
     const desiredX = Number.isFinite(screenX) ? screenX : width * 0.5;
     const desiredY = Number.isFinite(screenY) ? screenY : height * 0.48;
-    return this.smoothViewTo({
-      x: desiredX - point.x * targetZoom,
-      y: desiredY - point.y * targetZoom,
-      zoom: targetZoom,
-    }, { timeConstant });
+    return this.smoothViewTo({ x: desiredX - point.x * targetZoom, y: desiredY - point.y * targetZoom, zoom: targetZoom }, { timeConstant });
   }
 
   smoothViewTo(target, { timeConstant = 340 } = {}) {
     if (!target) return false;
-    const next = {
-      x: Number(target.x),
-      y: Number(target.y),
-      zoom: clamp(Number(target.zoom) || this.view.zoom, 0.2, 5),
-    };
+    const next = { x: Number(target.x), y: Number(target.y), zoom: clamp(Number(target.zoom) || this.view.zoom, 0.2, 5) };
     if (!Number.isFinite(next.x) || !Number.isFinite(next.y)) return false;
-
     const positionDistance = Math.hypot(next.x - this.view.x, next.y - this.view.y);
     const zoomDistance = Math.abs(Math.log(next.zoom / this.view.zoom));
     if (positionDistance < 0.5 && zoomDistance < 0.002) return false;
-
     this.followTarget = next;
     this.followTimeConstant = clamp(Number(timeConstant) || 340, 80, 1200);
 
@@ -282,9 +237,9 @@ export class CanvasRenderer {
       this.invalidateBase();
       this.requestRender();
       this.saveView();
+      this.emitViewChange();
       return true;
     }
-
     if (this.followHandle === null) {
       this.followLastTimestamp = null;
       this.followHandle = requestAnimationFrame((timestamp) => this.stepFollow(timestamp));
@@ -295,19 +250,17 @@ export class CanvasRenderer {
   stepFollow(timestamp) {
     this.followHandle = null;
     if (!this.followTarget) return;
-
     const previous = this.followLastTimestamp ?? timestamp - 16.67;
     const dt = clamp(timestamp - previous, 8, 50);
     this.followLastTimestamp = timestamp;
-
     const remainingX = this.followTarget.x - this.view.x;
     const remainingY = this.followTarget.y - this.view.y;
     const remainingZoom = this.followTarget.zoom - this.view.zoom;
     const alpha = 1 - Math.exp(-dt / this.followTimeConstant);
-
     this.view.x += remainingX * alpha;
     this.view.y += remainingY * alpha;
     this.view.zoom += remainingZoom * alpha;
+    this.emitViewChange();
     this.renderFollowFrame();
 
     const afterX = this.followTarget.x - this.view.x;
@@ -320,9 +273,9 @@ export class CanvasRenderer {
       this.invalidateBase();
       this.renderFollowFrame();
       this.saveView();
+      this.emitViewChange();
       return;
     }
-
     this.followHandle = requestAnimationFrame((nextTimestamp) => this.stepFollow(nextTimestamp));
   }
 
@@ -336,10 +289,8 @@ export class CanvasRenderer {
 
   cancelFollowAnimation() {
     const wasAnimating = this.followHandle !== null || this.followTarget !== null;
-    if (this.followHandle !== null) {
-      cancelAnimationFrame(this.followHandle);
-      this.followHandle = null;
-    }
+    if (this.followHandle !== null) cancelAnimationFrame(this.followHandle);
+    this.followHandle = null;
     this.followTarget = null;
     this.followLastTimestamp = null;
     if (wasAnimating) this.invalidateBase();
@@ -351,6 +302,7 @@ export class CanvasRenderer {
     this.view.y += dy;
     this.invalidateBase();
     this.requestRender();
+    this.emitViewChange();
   }
 
   zoomAt(clientX, clientY, newZoom) {
@@ -364,6 +316,13 @@ export class CanvasRenderer {
     this.view.y = sy - before.y * this.view.zoom;
     this.invalidateBase();
     this.requestRender();
+    this.emitViewChange();
+  }
+
+  resetZoom() {
+    const rect = this.canvas.getBoundingClientRect();
+    this.zoomAt(rect.left + rect.width / 2, rect.top + rect.height / 2, 1);
+    this.saveView();
   }
 
   resetView() {
@@ -372,6 +331,7 @@ export class CanvasRenderer {
     this.saveView();
     this.invalidateBase();
     this.requestRender();
+    this.emitViewChange();
   }
 
   exportPng() {
@@ -388,6 +348,4 @@ function averagePressure(points) {
   return points.reduce((sum, point) => sum + Number(point.pressure ?? 0.5), 0) / points.length;
 }
 
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
+function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
