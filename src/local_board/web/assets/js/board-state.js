@@ -69,6 +69,8 @@ export class BoardState {
       completedLayerChanged = true;
     } else if (type === "object.update") {
       completedLayerChanged = this.updateObject(event.object_id, event.patch, false);
+    } else if (type === "object.reorder") {
+      completedLayerChanged = this.reorderObject(event.object_id, event.position, false);
     } else if (type === "object.delete") {
       if (this.objects.has(event.object_id)) completedLayerChanged = true;
       this.objects.delete(event.object_id);
@@ -120,6 +122,18 @@ export class BoardState {
     }
     if (touchGeneration) this.baseGeneration += 1;
     return true;
+  }
+
+  reorderObject(id, position, touchGeneration = true) {
+    if (!this.objects.has(id)) return false;
+    const next = this.objectOrder.filter((item) => item !== id);
+    if (position === "front") next.push(id);
+    else if (position === "back") next.unshift(id);
+    else return false;
+    const changed = next.some((item, index) => item !== this.objectOrder[index]);
+    this.objectOrder = next;
+    if (changed && touchGeneration) this.baseGeneration += 1;
+    return changed;
   }
 
   listStrokes() { return this.order.map((id) => this.strokes.get(id)).filter(Boolean); }
