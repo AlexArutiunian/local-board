@@ -56,6 +56,10 @@ class BoardObject:
     height: float
     src: str
     name: str = "image"
+    crop_x: float = 0.0
+    crop_y: float = 0.0
+    crop_width: float = 1.0
+    crop_height: float = 1.0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -68,6 +72,10 @@ class BoardObject:
             "height": self.height,
             "src": self.src,
             "name": self.name,
+            "crop_x": self.crop_x,
+            "crop_y": self.crop_y,
+            "crop_width": self.crop_width,
+            "crop_height": self.crop_height,
         }
 
     @classmethod
@@ -82,4 +90,8 @@ class BoardObject:
             height=float(payload.get("height", 240)),
             src=str(payload.get("src", "")),
             name=str(payload.get("name", "image")),
+            crop_x=float(payload.get("crop_x", 0.0)),
+            crop_y=float(payload.get("crop_y", 0.0)),
+            crop_width=float(payload.get("crop_width", 1.0)),
+            crop_height=float(payload.get("crop_height", 1.0)),
         )
