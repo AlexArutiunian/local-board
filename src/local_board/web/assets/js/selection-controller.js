@@ -18,6 +18,8 @@ export class SelectionController {
     this.onSelectionChange = onSelectionChange;
     this.selected = new Set();
     this.activePointerId = null;
+    this.activePointerType = null;
+    this.requiredButtonMask = 0;
     this.mode = null;
     this.anchor = null;
     this.originals = new Map();
@@ -40,12 +42,21 @@ export class SelectionController {
   clear() { this.setSelection([]); }
   selectAll() { this.setSelection(allItemKeys(this.state)); }
 
-  pointerDown(event) {
+  pointerDown(event, { forceMarquee = false } = {}) {
     const world = this.renderer.screenToWorld(event.clientX, event.clientY);
     const additive = Boolean(event.shiftKey);
     this.activePointerId = event.pointerId;
+    this.activePointerType = event.pointerType || null;
+    this.requiredButtonMask = this.activePointerType === "mouse" ? buttonMask(event.button) : 0;
     this.anchor = world;
     this.lastDelta = { dx: 0, dy: 0 };
+
+    // Right-mouse temporary selection is always a marquee gesture. It must not
+    // accidentally grab/move the object under the initial click.
+    if (forceMarquee) {
+      this.startMarquee(world, additive);
+      return true;
+    }
 
     if (this.hitResizeHandle(event)) {
       this.mode = "resize";
@@ -68,21 +79,29 @@ export class SelectionController {
         this.mode = "move";
         this.captureOriginals();
       } else {
-        this.mode = null;
-        this.activePointerId = null;
+        this.finishGestureState();
       }
       return true;
     }
 
     if (!additive) this.clear();
-    this.mode = "marquee";
-    this.marqueeAdditive = additive;
-    this.renderer.setMarquee({ x1: world.x, y1: world.y, x2: world.x, y2: world.y });
+    this.startMarquee(world, additive);
     return true;
   }
 
   pointerMove(event) {
     if (!this.ownsPointer(event.pointerId) || !this.mode) return false;
+
+    // Defensive mouse recovery: if the release event was lost, `buttons`
+    // still tells us that the initiating button is no longer down. Finish the
+    // gesture immediately instead of leaving a sticky marquee on screen.
+    if (this.activePointerType === "mouse"
+      && this.requiredButtonMask !== 0
+      && (Number(event.buttons || 0) & this.requiredButtonMask) === 0) {
+      this.pointerUp(event);
+      return true;
+    }
+
     const world = this.renderer.screenToWorld(event.clientX, event.clientY);
 
     if (this.mode === "marquee") {
@@ -104,7 +123,12 @@ export class SelectionController {
 
     if (mode === "marquee") {
       const world = this.renderer.screenToWorld(event.clientX, event.clientY);
-      const hits = itemsIntersectingRect(this.state, { x1: this.anchor.x, y1: this.anchor.y, x2: world.x, y2: world.y });
+      const hits = itemsIntersectingRect(this.state, {
+        x1: this.anchor.x,
+        y1: this.anchor.y,
+        x2: world.x,
+        y2: world.y,
+      });
       const next = this.marqueeAdditive ? new Set([...this.selected, ...hits]) : new Set(hits);
       this.setSelection(next);
     } else if (mode === "move") {
@@ -114,11 +138,7 @@ export class SelectionController {
     }
 
     this.renderer.setMarquee(null);
-    this.activePointerId = null;
-    this.mode = null;
-    this.anchor = null;
-    this.originals.clear();
-    this.lastDelta = { dx: 0, dy: 0 };
+    this.finishGestureState();
     this.renderer.requestRender();
     return true;
   }
@@ -126,11 +146,25 @@ export class SelectionController {
   cancelPointer() {
     if (this.mode === "move" || this.mode === "resize") this.restoreOriginals();
     this.renderer.setMarquee(null);
+    this.finishGestureState();
+    this.renderer.requestRender();
+  }
+
+  startMarquee(world, additive) {
+    this.mode = "marquee";
+    this.marqueeAdditive = additive;
+    this.renderer.setMarquee({ x1: world.x, y1: world.y, x2: world.x, y2: world.y });
+  }
+
+  finishGestureState() {
     this.activePointerId = null;
+    this.activePointerType = null;
+    this.requiredButtonMask = 0;
     this.mode = null;
     this.anchor = null;
     this.originals.clear();
     this.lastDelta = { dx: 0, dy: 0 };
+    this.marqueeAdditive = false;
   }
 
   deleteSelected() {
@@ -228,7 +262,12 @@ export class SelectionController {
         this.sendEvent({ type: "stroke.translate", op_id: createId(), stroke_id: parsed.id, dx, dy });
       } else if (parsed?.kind === "object") {
         const object = this.state.getObject(parsed.id);
-        if (object) this.sendEvent({ type: "object.update", op_id: createId(), object_id: parsed.id, patch: { x: object.x, y: object.y } });
+        if (object) this.sendEvent({
+          type: "object.update",
+          op_id: createId(),
+          object_id: parsed.id,
+          patch: { x: object.x, y: object.y },
+        });
       }
     }
   }
@@ -269,7 +308,11 @@ export class SelectionController {
 
   itemExists(key) {
     const parsed = parseItemKey(key);
-    return parsed?.kind === "stroke" ? this.state.hasStroke(parsed.id) : parsed?.kind === "object" ? this.state.hasObject(parsed.id) : false;
+    return parsed?.kind === "stroke"
+      ? this.state.hasStroke(parsed.id)
+      : parsed?.kind === "object"
+        ? this.state.hasObject(parsed.id)
+        : false;
   }
 
   bindKeyboard() {
@@ -292,6 +335,15 @@ export class SelectionController {
       }
     });
   }
+}
+
+function buttonMask(button) {
+  if (button === 0) return 1;
+  if (button === 1) return 4;
+  if (button === 2) return 2;
+  if (button === 3) return 8;
+  if (button === 4) return 16;
+  return 0;
 }
 
 export { objectKey };
