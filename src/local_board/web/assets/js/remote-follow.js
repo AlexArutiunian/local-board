@@ -73,7 +73,14 @@ export class RemoteFollowController {
 
   followPoint(point, now = performance.now()) {
     if (!point || this.isPaused(now)) return false;
-    return this.renderer.followWorldPoint(point);
+
+    const screenPoint = this.renderer.worldToScreen(point);
+    const { width, height } = this.renderer.getViewportSize();
+    const delta = computeFollowDelta({ point: screenPoint, width, height });
+    if (!delta.needed) return false;
+
+    this.renderer.smoothPanBy(delta.dx, delta.dy);
+    return true;
   }
 }
 
