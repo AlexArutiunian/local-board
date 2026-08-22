@@ -1,17 +1,16 @@
-import { combinedBounds, objectKey, parseItemKey } from "./board-geometry.js";
+import { combinedBounds, objectKey } from "./board-geometry.js";
 import { createId } from "./id.js";
 
 const MATHJAX_SRC = "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js";
 const MAX_CAPTURE_SIDE = 1400;
 
 export class FormulaTransformController {
-  constructor({ boardId, selection, state, renderer, sendEvent, history, clientId, showToast = null }) {
+  constructor({ boardId, selection, state, renderer, sendEvent, clientId, showToast = null }) {
     this.boardId = boardId;
     this.selection = selection;
     this.state = state;
     this.renderer = renderer;
     this.sendEvent = sendEvent;
-    this.history = history;
     this.clientId = clientId;
     this.showToast = showToast;
     this.busy = false;
@@ -31,7 +30,7 @@ export class FormulaTransformController {
     button.dataset.formulaTransform = "true";
     button.className = "formula-transform-action";
     button.textContent = "Преобразовать формулу";
-    button.title = "Распознать выделение и заменить его аккуратной формулой";
+    button.title = "Распознать выделение и вставить аккуратную формулу рядом";
     container.insertBefore(button, container.querySelector(".image-context-separator"));
     button.addEventListener("click", (event) => {
       event.preventDefault();
@@ -53,11 +52,7 @@ export class FormulaTransformController {
     this.setBusy(true);
     this.showToast?.("Распознаю формулу…", "busy");
     try {
-      const imageDataUrl = await renderSelectionCapture({
-        state: this.state,
-        keys,
-        bounds,
-      });
+      const imageDataUrl = await renderSelectionCapture({ state: this.state, keys, bounds });
       const result = await requestFormula(this.boardId, imageDataUrl);
       const latex = normalizeLatex(result.latex);
       if (!latex) throw new Error("Модель не вернула формулу");
@@ -65,7 +60,7 @@ export class FormulaTransformController {
       this.showToast?.("Рисую аккуратную формулу…", "busy");
       const rendered = await renderLatexPng(latex, bounds);
       const upload = await uploadFormulaAsset(this.boardId, rendered.blob);
-      const placement = fitFormulaBounds(bounds, rendered.aspectRatio);
+      const placement = placeFormulaBelowSelection(bounds, rendered.aspectRatio);
       const formulaObject = {
         id: createId(),
         kind: "image",
@@ -73,44 +68,17 @@ export class FormulaTransformController {
         src: upload.src,
         name: `formula-${Date.now()}.png`,
       };
-
-      // All slow/external work is complete before touching the board. From this
-      // point replacement is one grouped local history action: Undo removes the
-      // clean formula and restores every original selected item in one step.
-      this.history?.beginGroup("formula-transform");
-      try {
-        for (const key of keys) this.deleteKey(key);
-        const createEvent = { type: "object.create", op_id: createId(), object: formulaObject };
-        this.state.applyEvent(createEvent, null, this.clientId);
-        this.sendEvent(createEvent);
-        this.history?.endGroup();
-      } catch (error) {
-        this.history?.endGroup();
-        throw error;
-      }
-
+      const createEvent = { type: "object.create", op_id: createId(), object: formulaObject };
+      this.state.applyEvent(createEvent, null, this.clientId);
+      this.sendEvent(createEvent);
       this.selection.selectOnly(objectKey(formulaObject.id));
       this.renderer.invalidateBase();
       this.renderer.requestRender();
-      this.showToast?.(`Формула: ${latex}`, "success");
+      this.showToast?.(`Готово: ${latex}`, "success");
       return true;
     } finally {
       this.setBusy(false);
     }
-  }
-
-  deleteKey(key) {
-    const parsed = parseItemKey(key);
-    if (!parsed) return;
-    let event = null;
-    if (parsed.kind === "stroke" && this.state.hasStroke(parsed.id)) {
-      event = { type: "stroke.delete", op_id: createId(), stroke_id: parsed.id };
-    } else if (parsed.kind === "object" && this.state.hasObject(parsed.id)) {
-      event = { type: "object.delete", op_id: createId(), object_id: parsed.id };
-    }
-    if (!event) return;
-    this.state.applyEvent(event, null, this.clientId);
-    this.sendEvent(event);
   }
 
   setBusy(busy) {
@@ -164,8 +132,6 @@ export function fitFormulaBounds(bounds, aspectRatio) {
     height = maxHeight;
     width = height * ratio;
   }
-  // Keep a little breathing room so the replacement does not touch the old
-  // selection rectangle edges and looks natural at the original scale.
   width *= 0.94;
   height *= 0.94;
   return {
@@ -173,6 +139,16 @@ export function fitFormulaBounds(bounds, aspectRatio) {
     y: bounds.y + (bounds.height - height) / 2,
     width,
     height,
+  };
+}
+
+export function placeFormulaBelowSelection(bounds, aspectRatio) {
+  const fitted = fitFormulaBounds(bounds, aspectRatio);
+  const gap = Math.max(14, Math.min(36, Number(bounds.height) * 0.16));
+  return {
+    ...fitted,
+    x: bounds.x + (bounds.width - fitted.width) / 2,
+    y: bounds.y + bounds.height + gap,
   };
 }
 
@@ -184,10 +160,7 @@ async function requestFormula(boardId, imageDataUrl) {
   });
   let payload = null;
   try { payload = await response.json(); } catch (_) {}
-  if (!response.ok) {
-    const detail = payload?.detail || `HTTP ${response.status}`;
-    throw new Error(String(detail));
-  }
+  if (!response.ok) throw new Error(String(payload?.detail || `HTTP ${response.status}`));
   return payload;
 }
 
