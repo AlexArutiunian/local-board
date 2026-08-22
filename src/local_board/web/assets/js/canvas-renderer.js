@@ -8,21 +8,18 @@ export class CanvasRenderer {
     this.boardId = boardId;
     this.renderHandle = null;
 
-    // Completed strokes are expensive to redraw for every realtime append. Keep
-    // them in a bitmap cache and draw only active/incomplete strokes each frame.
-    // A normal in-memory canvas is used instead of OffscreenCanvas for broad
-    // Safari compatibility.
     this.baseCanvas = document.createElement("canvas");
     this.baseCtx = this.baseCanvas.getContext("2d");
     this.baseDirty = true;
     this.cachedBaseGeneration = -1;
 
-    // Remote-writer following moves only this browser's camera. New remote points
-    // can retarget the animation while it is running, producing a soft tracking
-    // motion instead of discrete jumps between WebSocket packets.
+    // One camera animator handles both automatic writer following and explicit
+    // "go to last writing" navigation. Retargeting an in-flight animation is
+    // cheap and avoids packet-by-packet camera jumps.
     this.followHandle = null;
     this.followTarget = null;
     this.followLastTimestamp = null;
+    this.followTimeConstant = 340;
     this.prefersReducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
@@ -85,17 +82,11 @@ export class CanvasRenderer {
   }
 
   render() {
-    // BoardState increments baseGeneration only when completed/static ink changes.
-    // This catches local eraser/undo/clear and remote structural events without
-    // forcing every caller to remember to invalidate the cache manually.
     if (this.cachedBaseGeneration !== this.state.baseGeneration) {
       this.baseDirty = true;
     }
     if (this.baseDirty) this.rebuildBase();
 
-    // Copy the cached background/completed ink in device pixels. Then draw only
-    // currently active strokes. This keeps per-frame work almost independent of
-    // how much has already been written on the board.
     const ctx = this.ctx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
@@ -203,29 +194,64 @@ export class CanvasRenderer {
     };
   }
 
-  smoothPanBy(dx, dy) {
-    if (!Number.isFinite(dx) || !Number.isFinite(dy)) return;
-    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
-
-    this.followTarget = {
+  smoothPanBy(dx, dy, { timeConstant = 340 } = {}) {
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) return false;
+    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return false;
+    return this.smoothViewTo({
       x: this.view.x + dx,
       y: this.view.y + dy,
+      zoom: this.view.zoom,
+    }, { timeConstant });
+  }
+
+  smoothFocusWorldPoint(point, {
+    zoom = this.view.zoom,
+    screenX = null,
+    screenY = null,
+    timeConstant = 340,
+  } = {}) {
+    if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return false;
+    const { width, height } = this.getViewportSize();
+    const targetZoom = clamp(Number(zoom) || this.view.zoom, 0.2, 5);
+    const desiredX = Number.isFinite(screenX) ? screenX : width * 0.5;
+    const desiredY = Number.isFinite(screenY) ? screenY : height * 0.48;
+    return this.smoothViewTo({
+      x: desiredX - point.x * targetZoom,
+      y: desiredY - point.y * targetZoom,
+      zoom: targetZoom,
+    }, { timeConstant });
+  }
+
+  smoothViewTo(target, { timeConstant = 340 } = {}) {
+    if (!target) return false;
+    const next = {
+      x: Number(target.x),
+      y: Number(target.y),
+      zoom: clamp(Number(target.zoom) || this.view.zoom, 0.2, 5),
     };
+    if (!Number.isFinite(next.x) || !Number.isFinite(next.y)) return false;
+
+    const positionDistance = Math.hypot(next.x - this.view.x, next.y - this.view.y);
+    const zoomDistance = Math.abs(Math.log(next.zoom / this.view.zoom));
+    if (positionDistance < 0.5 && zoomDistance < 0.002) return false;
+
+    this.followTarget = next;
+    this.followTimeConstant = clamp(Number(timeConstant) || 340, 80, 1200);
 
     if (this.prefersReducedMotion) {
-      this.view.x = this.followTarget.x;
-      this.view.y = this.followTarget.y;
+      this.view = { ...next };
       this.followTarget = null;
       this.invalidateBase();
       this.requestRender();
       this.saveView();
-      return;
+      return true;
     }
 
     if (this.followHandle === null) {
       this.followLastTimestamp = null;
       this.followHandle = requestAnimationFrame((timestamp) => this.stepFollow(timestamp));
     }
+    return true;
   }
 
   stepFollow(timestamp) {
@@ -238,18 +264,20 @@ export class CanvasRenderer {
 
     const remainingX = this.followTarget.x - this.view.x;
     const remainingY = this.followTarget.y - this.view.y;
-    const alpha = 1 - Math.exp(-dt / 82);
+    const remainingZoom = this.followTarget.zoom - this.view.zoom;
+    const alpha = 1 - Math.exp(-dt / this.followTimeConstant);
 
     this.view.x += remainingX * alpha;
     this.view.y += remainingY * alpha;
+    this.view.zoom += remainingZoom * alpha;
     this.invalidateBase();
     this.renderFollowFrame();
 
     const afterX = this.followTarget.x - this.view.x;
     const afterY = this.followTarget.y - this.view.y;
-    if (Math.hypot(afterX, afterY) < 0.55) {
-      this.view.x = this.followTarget.x;
-      this.view.y = this.followTarget.y;
+    const afterZoom = Math.abs(Math.log(this.followTarget.zoom / this.view.zoom));
+    if (Math.hypot(afterX, afterY) < 0.55 && afterZoom < 0.0015) {
+      this.view = { ...this.followTarget };
       this.followTarget = null;
       this.followLastTimestamp = null;
       this.invalidateBase();
@@ -262,8 +290,6 @@ export class CanvasRenderer {
   }
 
   renderFollowFrame() {
-    // If realtime input already queued a paint for this frame, absorb it into the
-    // camera paint instead of drawing twice.
     if (this.renderHandle !== null) {
       cancelAnimationFrame(this.renderHandle);
       this.renderHandle = null;
@@ -310,7 +336,6 @@ export class CanvasRenderer {
   }
 
   exportPng() {
-    // Ensure the exported bitmap includes the latest queued frame.
     this.render();
     const anchor = document.createElement("a");
     anchor.href = this.canvas.toDataURL("image/png");
