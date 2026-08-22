@@ -61,8 +61,11 @@ export class RealtimeClient {
   }
 
   send(event) {
+    // Local mutation objects are immutable after send. Keep the object itself in
+    // the reconnect outbox and only clone when a snapshot/resync needs a detached
+    // copy. This avoids a stringify+parse roundtrip on every Pencil event.
     if (event.type !== "ping") {
-      this.pending.set(event.op_id, cloneJson(event));
+      this.pending.set(event.op_id, event);
     }
     if (this.socket?.readyState === WebSocket.OPEN) {
       this.socket.send(JSON.stringify(event));
