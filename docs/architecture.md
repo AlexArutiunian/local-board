@@ -95,6 +95,8 @@ crop_x, crop_y, crop_width, crop_height
 
 Assets live under `~/.local/share/local-board/assets/<room>/`; cross-room asset references are rejected. Crop is non-destructive normalized metadata. `objects[]` order is image stacking order; `object.reorder` persists front/back changes. Ink renders above the image layer.
 
+AI-rendered formulas deliberately reuse the same image-object path after recognition/typesetting; there is no second formula persistence model yet.
+
 ## Frontend input model
 
 ### Apple Pencil
@@ -106,6 +108,8 @@ Apple Pencil retains the active Pen/Eraser/Pan semantics even while a finger-sel
 The explicit **Select tool is the exception**: when Select is active, Pencil is intentionally a selection pointer rather than an ink pointer. Leaving Select for Pen immediately restores normal Pencil writing.
 
 `pen-ui-controls.js` handles a separate Safari problem: Pencil taps on app-style HTML controls do not always synthesize a reliable click. It converts a short, low-movement Pencil pointer tap on buttons/menu actions into the same semantic click as a finger and suppresses a possible duplicate native click. Binding is idempotent and is installed before the first profile dialog.
+
+`pen-ui-controls.js` also imports `selection-productivity-bootstrap.js` as a side-effect before the app constructs its concrete `InputController`; this keeps Select routing out of `app.js` and the Pencil drawing hot path.
 
 ### Finger / mouse
 
@@ -172,6 +176,44 @@ This is a semantic invariant: **two-finger navigation wins over Select** on touc
 
 Selection outlines, clipboards, crop overlay and contextual toolbars are local UI state and are never broadcast. Only semantic mutations resulting from move/delete/paste/etc. enter realtime state.
 
+## AI formula transformation
+
+`formula-transform.js` adds **Преобразовать формулу** to both the generic selection toolbar and single-image toolbar.
+
+Pipeline:
+
+```text
+selected board items
+→ browser offscreen PNG containing only selected content
+→ POST /api/boards/<room>/ai/formula
+→ FastAPI ai_formula.py
+→ OpenRouter /api/v1/chat/completions
+→ stealth/ox-alpha image+text → JSON {latex}
+→ MathJax TeX→SVG in browser
+→ rasterized transparent PNG
+→ existing /assets upload
+→ ordinary object.create realtime event
+```
+
+The capture is reconstructed from selected board data rather than cropping the visible canvas. Therefore selection outlines, unrelated strokes, current viewport chrome and grid are not sent to the model. Selected image objects are drawn using their current non-destructive crop; selected strokes are redrawn on a white background.
+
+The server owns the OpenRouter credential:
+
+```text
+OPENROUTER_API_KEY
+OPENROUTER_FORMULA_MODEL=stealth/ox-alpha
+```
+
+`.env` is gitignored and `scripts/run.sh` sources it before starting Uvicorn. The API key is never returned to or embedded in browser JavaScript.
+
+The OpenRouter call is deliberately non-streaming and uses low reasoning effort plus a small completion budget because the workload is OCR/serialization rather than mathematical problem solving. The prompt explicitly asks for MathJax-compatible LaTeX and forbids solving/simplifying the expression.
+
+Recognition is **non-destructive in the first product version**. The source selection remains; the typeset result is placed directly below it and scaled to fit approximately the same selected dimensions. This makes visual verification easy and means one normal image-create Undo removes the AI result without needing a cross-event replacement transaction.
+
+MathJax is lazy-loaded only on the first transform from jsDelivr. We use SVG output with `fontCache: none`, then serialize/rasterize it so the persisted shared board still contains a normal PNG image. MathJax is Apache-2.0 licensed.
+
+Privacy boundary: the selected capture is external data sent through OpenRouter to the selected third-party model provider. Do not treat the AI endpoint as local-only processing.
+
 ## Undo/redo
 
 `LocalHistoryController` records only locally initiated reversible actions. Remote peer mutations never enter another browser's undo stack.
@@ -179,11 +221,11 @@ Selection outlines, clipboards, crop overlay and contextual toolbars are local U
 Current reversible content actions include:
 
 - stroke create/delete;
-- image create/delete (including duplicate/paste).
+- image create/delete (including duplicate/paste and AI formula result insertion).
 
 `BoardState` keeps bounded tombstones for deleted strokes and image objects, enabling an image deleted from its contextual menu to return with the same geometry/crop on Undo. Replay uses `recordHistory:false` to avoid recursive history entries.
 
-When selection-productivity duplicates handwriting via `stroke.restore`, it calls the same `onStrokeFinished` history hook used by normal completed ink, so the new stroke can subsequently be undone as a local creation. Multi-item selection actions are currently represented as the underlying semantic events rather than one transactional history record.
+The local history instance is exposed to the modular selection bootstrap so duplicated handwriting can call the same `recordCreatedStroke()` path used by normal ink.
 
 Background changes are currently not part of local Undo/Redo.
 
@@ -245,6 +287,8 @@ error
 
 Every mutation has `op_id`; retry delivery is deduplicated. Structural mutations are persisted atomically. Reconnect starts from authoritative snapshot then resends pending operations.
 
+AI recognition itself is an ordinary HTTP helper operation and does not mutate room state. Only the resulting PNG upload plus `object.create` enter the existing realtime protocol.
+
 Presence is ephemeral and additionally carries `roster`; it does not increment board revision.
 
 ## Activity logging
@@ -302,6 +346,7 @@ Current JSON/filesystem storage intentionally matches single-process deployment.
 - one Uvicorn/FastAPI process;
 - process-local authoritative `BoardRoom`;
 - JSON + image files + append-only activity logs on one disk;
+- optional outbound OpenRouter request for formula OCR;
 - no real authentication;
 - roles are descriptive only.
 
@@ -314,7 +359,7 @@ Cloudflare Tunnel / reverse proxy
  ↓
 one Local Board process
  ↓
-persistent volume
+persistent volume + outbound OpenRouter
 ```
 
 Before permanent internet exposure add at minimum:
@@ -323,7 +368,8 @@ Before permanent internet exposure add at minimum:
 - private owner dashboard;
 - server-side permission checks;
 - Origin/Host validation;
-- rate limits and request/upload limits;
+- **rate limits on AI recognition**, because the endpoint uses a server-held API credential;
+- request/upload limits;
 - backups/abuse monitoring.
 
 While `BoardRoom` is in memory, run one app worker.
@@ -338,7 +384,7 @@ CRDT remains optional until richer concurrent editing actually needs it.
 
 - role-based security without real credentials;
 - accounts;
-- public internet hardening;
+- permanent public hardening of the AI endpoint;
 - multi-process horizontal scaling;
 - rich text/sticky notes/connectors/PDF-page objects;
 - lesson scheduling/product CRM layer.
