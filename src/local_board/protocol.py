@@ -8,6 +8,8 @@ HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 MAX_POINTS_PER_BATCH = 256
 MAX_POINTS_PER_STROKE = 20_000
 MAX_WIDTH = 64.0
+MIN_SOURCE_ZOOM = 0.2
+MAX_SOURCE_ZOOM = 5.0
 MUTATION_TYPES = {
     "stroke.begin",
     "stroke.append",
@@ -67,13 +69,23 @@ def normalize_stroke(payload: Any, *, max_points: int = MAX_POINTS_PER_BATCH) ->
     pointer_type = str(payload.get("pointer_type", "pen"))
     if pointer_type not in {"pen", "mouse", "touch"}:
         pointer_type = "pen"
-    return {
+
+    stroke: dict[str, Any] = {
         "id": _nonempty_string(payload.get("id"), "stroke.id"),
         "color": color,
         "width": width,
         "pointer_type": pointer_type,
         "points": normalize_points(payload.get("points"), max_points=max_points),
     }
+
+    # Optional viewport metadata is descriptive, never authorization/state.
+    # It lets another client show the same handwriting at approximately the
+    # same visual scale as the device where the stroke was created.
+    if payload.get("source_zoom") is not None:
+        source_zoom = _number(payload.get("source_zoom"), "stroke.source_zoom")
+        stroke["source_zoom"] = min(MAX_SOURCE_ZOOM, max(MIN_SOURCE_ZOOM, source_zoom))
+
+    return stroke
 
 
 def normalize_client_event(payload: Any) -> dict[str, Any]:
