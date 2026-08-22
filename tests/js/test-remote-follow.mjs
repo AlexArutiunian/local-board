@@ -3,7 +3,23 @@ import assert from "node:assert/strict";
 import {
   RemoteFollowController,
   computeFollowDelta,
+  matchedSourceZoom,
 } from "../../src/local_board/web/assets/js/remote-follow.js";
+
+function makeRenderer() {
+  const moves = [];
+  return {
+    view: { x: 0, y: 0, zoom: 1 },
+    moves,
+    worldToScreen(point) { return { ...point }; },
+    getViewportSize() { return { width: 1000, height: 700 }; },
+    smoothFocusWorldPoint(point, options) {
+      moves.push({ point: { ...point }, ...options });
+      return true;
+    },
+    cancelFollowAnimation() {},
+  };
+}
 
 {
   const centered = computeFollowDelta({
@@ -36,13 +52,12 @@ import {
 }
 
 {
-  const pans = [];
-  const renderer = {
-    worldToScreen(point) { return { ...point }; },
-    getViewportSize() { return { width: 1000, height: 700 }; },
-    smoothPanBy(dx, dy) { pans.push({ dx, dy }); },
-    cancelFollowAnimation() {},
-  };
+  assert.equal(matchedSourceZoom(1, 0.5), 0.5, "large source scale difference must be matched");
+  assert.equal(matchedSourceZoom(1, 0.95), 1, "tiny source scale difference should not cause camera breathing");
+}
+
+{
+  const renderer = makeRenderer();
   const follow = new RemoteFollowController({
     renderer,
     localClientId: "local",
@@ -51,9 +66,10 @@ import {
 
   follow.observe({
     type: "stroke.begin",
-    stroke: { id: "s1", points: [{ x: 980, y: 350 }] },
+    stroke: { id: "s1", source_zoom: 0.6, points: [{ x: 980, y: 350 }] },
   }, "remote-a", 100);
-  assert.equal(pans.length, 1, "a new remote writer outside the safe area should be followed");
+  assert.equal(renderer.moves.length, 1, "a new remote writer outside the safe area should be followed");
+  assert.equal(renderer.moves[0].zoom, 0.6, "follow should match materially different writer zoom");
 
   follow.noteLocalInteraction(200);
   follow.observe({
@@ -61,24 +77,18 @@ import {
     stroke_id: "s1",
     points: [{ x: 990, y: 360 }],
   }, "remote-a", 250);
-  assert.equal(pans.length, 1, "local interaction must temporarily suppress remote following");
+  assert.equal(renderer.moves.length, 1, "local interaction must temporarily suppress remote following");
 
   follow.observe({
     type: "stroke.append",
     stroke_id: "s1",
     points: [{ x: 995, y: 370 }],
   }, "remote-a", 1300);
-  assert.equal(pans.length, 2, "following should resume after the local interaction grace period");
+  assert.equal(renderer.moves.length, 2, "following should resume after the local interaction grace period");
 }
 
 {
-  const pans = [];
-  const renderer = {
-    worldToScreen(point) { return { ...point }; },
-    getViewportSize() { return { width: 1000, height: 700 }; },
-    smoothPanBy(dx, dy) { pans.push({ dx, dy }); },
-    cancelFollowAnimation() {},
-  };
+  const renderer = makeRenderer();
   const follow = new RemoteFollowController({ renderer, localClientId: "local" });
 
   follow.observe({
@@ -86,21 +96,51 @@ import {
     stroke: { id: "a", points: [{ x: 980, y: 300 }] },
   }, "remote-a", 0);
 
-  // A second writer's append alone must not make the viewport ping-pong while
-  // the first writer is still active.
   follow.observe({
     type: "stroke.append",
     stroke_id: "b",
     points: [{ x: 10, y: 300 }],
   }, "remote-b", 200);
-  assert.equal(pans.length, 1);
+  assert.equal(renderer.moves.length, 1);
 
-  // Explicitly beginning a new stroke is a clear focus handoff.
   follow.observe({
     type: "stroke.begin",
     stroke: { id: "b", points: [{ x: 10, y: 300 }] },
   }, "remote-b", 250);
-  assert.equal(pans.length, 2);
+  assert.equal(renderer.moves.length, 2);
+}
+
+{
+  const renderer = makeRenderer();
+  const follow = new RemoteFollowController({ renderer, localClientId: "local" });
+
+  follow.observeLocal({
+    type: "stroke.begin",
+    stroke: { id: "mine", source_zoom: 0.72, points: [{ x: 100, y: 120 }] },
+  });
+  follow.observeLocal({
+    type: "stroke.append",
+    stroke_id: "mine",
+    points: [{ x: 220, y: 240 }],
+  });
+
+  assert.equal(follow.hasLastWritten(), true);
+  assert.equal(follow.goToLastWritten(), true);
+  assert.equal(renderer.moves.at(-1).point.x, 220);
+  assert.equal(renderer.moves.at(-1).point.y, 240);
+  assert.equal(renderer.moves.at(-1).zoom, 0.72);
+}
+
+{
+  const renderer = makeRenderer();
+  const follow = new RemoteFollowController({ renderer, localClientId: "local" });
+  follow.seedLastFromStrokes([
+    { id: "old", source_zoom: 0.8, points: [{ x: 1, y: 2 }] },
+    { id: "new", source_zoom: 0.55, points: [{ x: 7, y: 8 }, { x: 9, y: 10 }] },
+  ]);
+  follow.goToLastWritten();
+  assert.deepEqual(renderer.moves.at(-1).point, { x: 9, y: 10 });
+  assert.equal(renderer.moves.at(-1).zoom, 0.55);
 }
 
 console.log("Remote follow tests passed");
