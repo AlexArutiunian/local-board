@@ -59,6 +59,7 @@ export class FormulaTransformController {
     const bounds = this.selection.getAreaBounds?.() || combinedBounds(this.state, keys);
     if (!bounds || bounds.width < 2 || bounds.height < 2) return false;
 
+    const startedAt = performance.now();
     this.setBusy(true);
     this.showToast?.("Распознаю формулу…", "busy");
     try {
@@ -84,7 +85,14 @@ export class FormulaTransformController {
       this.selection.selectOnly(objectKey(formulaObject.id));
       this.renderer.invalidateBase();
       this.renderer.requestRender();
-      this.showToast?.(`Готово: ${latex}`, "success");
+      const elapsedSeconds = Math.max(0, (performance.now() - startedAt) / 1000);
+      console.info("Formula transform timing", {
+        totalMs: Math.round(elapsedSeconds * 1000),
+        ocrMs: result.elapsed_ms ?? null,
+        model: result.actual_model || result.model || null,
+        attemptedModels: result.attempted_models || [],
+      });
+      this.showToast?.(`Готово · ${elapsedSeconds.toFixed(1)} с`, "success");
       return true;
     } finally {
       this.setBusy(false);
