@@ -1,7 +1,8 @@
 export class RealtimeClient {
-  constructor({ boardId, clientId, onSnapshot, onEvent, onPresence, onStatus, onError }) {
+  constructor({ boardId, clientId, profile, onSnapshot, onEvent, onPresence, onStatus, onError }) {
     this.boardId = boardId;
     this.clientId = clientId;
+    this.profile = profile;
     this.onSnapshot = onSnapshot;
     this.onEvent = onEvent;
     this.onPresence = onPresence;
@@ -18,7 +19,13 @@ export class RealtimeClient {
     clearTimeout(this.retryTimer);
     this.onStatus("connecting");
     const scheme = location.protocol === "https:" ? "wss" : "ws";
-    const url = `${scheme}://${location.host}/ws/${encodeURIComponent(this.boardId)}?client_id=${encodeURIComponent(this.clientId)}`;
+    const params = new URLSearchParams({
+      client_id: this.clientId,
+      name: this.profile?.name || "Участник",
+      role: this.profile?.role || "student",
+      device: this.profile?.device || "Браузер",
+    });
+    const url = `${scheme}://${location.host}/ws/${encodeURIComponent(this.boardId)}?${params}`;
     const socket = new WebSocket(url);
     this.socket = socket;
 
@@ -37,14 +44,14 @@ export class RealtimeClient {
 
       if (payload.type === "snapshot") {
         this.onSnapshot(payload.board, this.pendingEvents());
-        this.onPresence(payload.participants || 1);
+        this.onPresence(payload.participants || 1, payload.roster || []);
         this.flushPending();
       } else if (payload.type === "event") {
         this.onEvent(payload.event, payload.revision, payload.actor_id);
       } else if (payload.type === "ack") {
         this.pending.delete(payload.op_id);
       } else if (payload.type === "presence") {
-        this.onPresence(payload.participants || 0);
+        this.onPresence(payload.participants || 0, payload.roster || []);
       } else if (payload.type === "error") {
         this.onError(payload.message || "Ошибка синхронизации");
       }
@@ -61,15 +68,8 @@ export class RealtimeClient {
   }
 
   send(event) {
-    // Local mutation objects are immutable after send. Keep the object itself in
-    // the reconnect outbox and only clone when a snapshot/resync needs a detached
-    // copy. This avoids a stringify+parse roundtrip on every Pencil event.
-    if (event.type !== "ping") {
-      this.pending.set(event.op_id, event);
-    }
-    if (this.socket?.readyState === WebSocket.OPEN) {
-      this.socket.send(JSON.stringify(event));
-    }
+    if (event.type !== "ping") this.pending.set(event.op_id, event);
+    if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(event));
   }
 
   pendingEvents() {
@@ -78,9 +78,7 @@ export class RealtimeClient {
 
   flushPending() {
     if (this.socket?.readyState !== WebSocket.OPEN) return;
-    for (const event of this.pending.values()) {
-      this.socket.send(JSON.stringify(event));
-    }
+    for (const event of this.pending.values()) this.socket.send(JSON.stringify(event));
   }
 
   scheduleReconnect() {
