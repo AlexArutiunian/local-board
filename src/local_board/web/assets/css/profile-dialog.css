@@ -1,0 +1,37 @@
+.profile-continue {
+  background: #1c1917;
+  color: #fff;
+  border-color: #1c1917;
+  box-shadow: 0 2px 8px rgba(28, 25, 23, .08);
+}
+
+.profile-continue:hover {
+  background: #292524;
+  color: #fff;
+  border-color: #292524;
+  box-shadow: 0 5px 16px rgba(28, 25, 23, .16);
+}
+
+.profile-continue:active {
+  background: #0c0a09;
+  color: #fff;
+  border-color: #0c0a09;
+}
+
+.profile-continue:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+.profile-role-switch button:not(.active):not(:disabled):hover {
+  background: #e7e5e4;
+  color: #1c1917;
+  border-color: transparent;
+}
+
+.profile-role-switch button.active:hover,
+.profile-role-switch button:disabled.active:hover {
+  background: #fff;
+  color: #1c1917;
+  border-color: #e7e5e4;
+}
