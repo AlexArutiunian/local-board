@@ -21,8 +21,10 @@ const input = new InputController({
   renderer,
   clientId,
   sendEvent: (event) => realtime.send(event),
-  onStrokeFinished: (stroke) => {
-    localUndo.push(cloneStroke(stroke));
+  onStrokeFinished: (strokeId) => {
+    // Keep pointerup extremely cheap. Store only the id; clone the stroke only if
+    // Undo is actually requested later.
+    localUndo.push(strokeId);
     localRedo.length = 0;
     updateUndoButtons();
   },
@@ -91,10 +93,11 @@ function bindToolbar() {
 
 function undoLocalStroke() {
   while (localUndo.length) {
-    const stroke = localUndo.pop();
-    if (!state.hasStroke(stroke.id)) continue;
+    const strokeId = localUndo.pop();
+    const stroke = state.getStroke(strokeId);
+    if (!stroke) continue;
     localRedo.push(cloneStroke(stroke));
-    const event = { type: "stroke.delete", op_id: createId(), stroke_id: stroke.id };
+    const event = { type: "stroke.delete", op_id: createId(), stroke_id: strokeId };
     state.applyEvent(event, null, clientId);
     realtime.send(event);
     renderer.render();
@@ -119,7 +122,7 @@ function redoLocalStroke() {
   };
   state.applyEvent(event, null, clientId);
   realtime.send(event);
-  localUndo.push(cloneStroke(stroke));
+  localUndo.push(stroke.id);
   renderer.render();
   updateUndoButtons();
 }
@@ -172,7 +175,7 @@ async function copyText(text) {
 }
 
 function updateUndoButtons() {
-  document.getElementById("undo").disabled = !localUndo.some((stroke) => state.hasStroke(stroke.id));
+  document.getElementById("undo").disabled = !localUndo.some((strokeId) => state.hasStroke(strokeId));
   document.getElementById("redo").disabled = localRedo.length === 0;
 }
 
