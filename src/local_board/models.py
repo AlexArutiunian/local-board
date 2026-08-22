@@ -43,3 +43,43 @@ class Stroke:
             points=list(payload.get("points", [])),
             complete=bool(payload.get("complete", True)),
         )
+
+
+@dataclass
+class BoardObject:
+    id: str
+    author_id: str
+    kind: str
+    x: float
+    y: float
+    width: float
+    height: float
+    src: str
+    name: str = "image"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "author_id": self.author_id,
+            "kind": self.kind,
+            "x": self.x,
+            "y": self.y,
+            "width": self.width,
+            "height": self.height,
+            "src": self.src,
+            "name": self.name,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "BoardObject":
+        return cls(
+            id=str(payload["id"]),
+            author_id=str(payload.get("author_id", "unknown")),
+            kind=str(payload.get("kind", "image")),
+            x=float(payload.get("x", 0)),
+            y=float(payload.get("y", 0)),
+            width=float(payload.get("width", 320)),
+            height=float(payload.get("height", 240)),
+            src=str(payload.get("src", "")),
+            name=str(payload.get("name", "image")),
+        )
