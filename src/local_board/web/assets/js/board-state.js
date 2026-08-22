@@ -1,3 +1,5 @@
+import { normalizeBackground } from "./background-presets.js";
+
 export class BoardState {
   constructor() {
     this.strokes = new Map();
@@ -6,6 +8,7 @@ export class BoardState {
     this.objectOrder = [];
     this.deletedStrokes = new Map();
     this.deletedObjects = new Map();
+    this.background = normalizeBackground(null);
     this.revision = 0;
     this.baseGeneration = 0;
   }
@@ -17,6 +20,7 @@ export class BoardState {
     this.objectOrder = [];
     this.deletedStrokes.clear();
     this.deletedObjects.clear();
+    this.background = normalizeBackground(board?.background);
     this.revision = Number(board?.revision || 0);
     for (const raw of board?.strokes || []) {
       const stroke = cloneStroke(raw);
@@ -82,6 +86,9 @@ export class BoardState {
       }
       this.objects.delete(event.object_id);
       this.objectOrder = this.objectOrder.filter((id) => id !== event.object_id);
+    } else if (type === "board.background") {
+      this.background = normalizeBackground(event.background);
+      completedLayerChanged = true;
     } else if (type === "board.clear") {
       completedLayerChanged = this.strokes.size > 0 || this.objects.size > 0;
       this.strokes.clear();
