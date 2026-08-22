@@ -1,37 +1,64 @@
+import { AssetController } from "./asset-controller.js";
 import { BoardState, cloneStroke } from "./board-state.js";
 import { CanvasRenderer } from "./canvas-renderer.js";
 import { InputController } from "./input-controller.js";
 import { createInputDiagnostics } from "./input-diagnostics.js";
 import { RealtimeClient } from "./realtime-client.js";
 import { RemoteFollowController } from "./remote-follow.js";
+import { SelectionController } from "./selection-controller.js";
 import { createId } from "./id.js";
 
 const boardId = resolveBoardId();
 const clientId = getClientId();
 const state = new BoardState();
 const canvas = document.getElementById("board");
+const stage = document.getElementById("stage");
 const renderer = new CanvasRenderer(canvas, state, boardId);
 const remoteFollow = new RemoteFollowController({ renderer, localClientId: clientId });
 const localUndo = [];
 const localRedo = [];
 const inputDebug = createInputDiagnostics();
+let toastTimer = null;
+let realtime;
 
 document.getElementById("boardName").textContent = boardId;
 bindInputDiagnostics(canvas, inputDebug);
 renderer.setViewChangeListener(updateZoomButton);
 
-let realtime;
+const selection = new SelectionController({
+  canvas,
+  state,
+  renderer,
+  clientId,
+  sendEvent: sendLocalEvent,
+  onSelectionChange: updateSelectionUI,
+});
+
 const input = new InputController({
   canvas,
   state,
   renderer,
   clientId,
+  selection,
   sendEvent: sendLocalEvent,
   onStrokeFinished: (strokeId) => {
     localUndo.push(strokeId);
     localRedo.length = 0;
     updateUndoButtons();
   },
+});
+
+new AssetController({
+  boardId,
+  stage,
+  fileInput: document.getElementById("imageInput"),
+  imageButton: document.getElementById("imageInsert"),
+  state,
+  renderer,
+  sendEvent: sendLocalEvent,
+  selection,
+  onInserted: () => activateTool("select"),
+  onStatus: showToast,
 });
 
 bindRemoteFollowInteractionGuards(canvas, remoteFollow);
@@ -42,6 +69,7 @@ realtime = new RealtimeClient({
   onSnapshot: (board, pendingEvents) => {
     state.applySnapshot(board);
     for (const pending of pendingEvents) state.applyEvent(pending, null, clientId);
+    selection.clear();
     remoteFollow.seedLastFromStrokes(state.listStrokes());
     renderer.render();
     updateGoToLastButton();
@@ -49,6 +77,9 @@ realtime = new RealtimeClient({
   onEvent: (event, revision, actorId) => {
     state.applyEvent(event, revision, actorId);
     remoteFollow.observe(event, actorId);
+    if (["stroke.delete", "object.delete", "board.clear"].includes(event.type)) {
+      selection.setSelection(selection.keys());
+    }
     renderer.requestRender();
     updateGoToLastButton();
     if (event.type !== "stroke.append" && event.type !== "stroke.begin") updateUndoButtons();
@@ -59,11 +90,13 @@ realtime = new RealtimeClient({
 });
 
 bindToolbar();
+bindKeyboardShortcuts();
 realtime.connect();
 updateUndoButtons();
 updateGoToLastButton();
 updateCameraButtons();
 updateZoomButton(renderer.view);
+updateSelectionUI([]);
 
 window.addEventListener("beforeunload", () => realtime.close());
 document.addEventListener("visibilitychange", () => {
@@ -78,13 +111,11 @@ function sendLocalEvent(event) {
 
 function bindToolbar() {
   document.querySelectorAll("[data-tool]").forEach((button) => {
-    button.addEventListener("click", () => {
-      document.querySelectorAll("[data-tool]").forEach((item) => item.classList.toggle("active", item === button));
-      input.setTool(button.dataset.tool);
-    });
+    button.addEventListener("click", () => activateTool(button.dataset.tool));
   });
 
   bindColorPicker();
+  bindMorePopover();
 
   const widthInput = document.getElementById("width");
   const widthLabel = document.getElementById("widthLabel");
@@ -93,6 +124,7 @@ function bindToolbar() {
     widthLabel.textContent = widthInput.value;
   });
 
+  document.getElementById("deleteSelection").addEventListener("click", () => selection.deleteSelected());
   document.getElementById("undo").addEventListener("click", undoLocalStroke);
   document.getElementById("redo").addEventListener("click", redoLocalStroke);
   document.getElementById("goToLast").addEventListener("click", () => remoteFollow.goToLastWritten());
@@ -105,9 +137,40 @@ function bindToolbar() {
     remoteFollow.toggleAutoScale();
     updateCameraButtons();
   });
-  document.getElementById("exportPng").addEventListener("click", () => renderer.exportPng());
-  document.getElementById("clearBoard").addEventListener("click", clearBoard);
+  document.getElementById("exportPng").addEventListener("click", () => {
+    closePopover("morePopover", "moreTrigger");
+    renderer.exportPng();
+  });
+  document.getElementById("clearBoard").addEventListener("click", () => {
+    closePopover("morePopover", "moreTrigger");
+    clearBoard();
+  });
   document.getElementById("shareRoom").addEventListener("click", copyRoomLink);
+}
+
+function activateTool(tool) {
+  const button = document.querySelector(`[data-tool="${tool}"]`);
+  if (!button) return;
+  document.querySelectorAll("[data-tool]").forEach((item) => item.classList.toggle("active", item === button));
+  input.setTool(tool);
+}
+
+function bindKeyboardShortcuts() {
+  document.addEventListener("keydown", (event) => {
+    const target = event.target;
+    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target?.isContentEditable) return;
+    const key = event.key.toLowerCase();
+    if ((event.ctrlKey || event.metaKey) && key === "z") {
+      event.preventDefault();
+      event.shiftKey ? redoLocalStroke() : undoLocalStroke();
+      return;
+    }
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (key === "v") activateTool("select");
+    else if (key === "p") activateTool("pen");
+    else if (key === "e") activateTool("eraser");
+    else if (key === "h") activateTool("pan");
+  });
 }
 
 function bindColorPicker() {
@@ -116,50 +179,32 @@ function bindColorPicker() {
   const swatch = document.getElementById("currentColorSwatch");
   const customColor = document.getElementById("customColor");
   const paletteButtons = [...document.querySelectorAll(".color-option[data-color]")];
-  const toolbar = document.querySelector(".toolbar");
-
   const savedColor = loadPenColor();
   applyColor(savedColor, { persist: false, switchToPen: false });
 
   trigger.addEventListener("click", (event) => {
     event.stopPropagation();
-    popover.classList.contains("hidden") ? openPopover() : closePopover();
+    popover.classList.contains("hidden") ? open() : close();
   });
-
   paletteButtons.forEach((button) => button.addEventListener("click", () => {
     applyColor(button.dataset.color);
-    closePopover();
+    close();
   }));
   customColor.addEventListener("input", () => applyColor(customColor.value));
-  customColor.addEventListener("change", closePopover);
-  document.addEventListener("pointerdown", (event) => {
-    if (popover.classList.contains("hidden")) return;
-    if (popover.contains(event.target) || trigger.contains(event.target)) return;
-    closePopover();
-  }, { capture: true });
-  document.addEventListener("keydown", (event) => { if (event.key === "Escape") closePopover(); });
-  window.addEventListener("resize", () => { if (!popover.classList.contains("hidden")) positionPopover(); });
-  toolbar?.addEventListener("scroll", closePopover, { passive: true });
+  customColor.addEventListener("change", close);
+  bindOutsideClose(trigger, popover, close);
+  window.addEventListener("resize", () => { if (!popover.classList.contains("hidden")) positionPopover(trigger, popover); });
+  document.querySelector(".toolbar")?.addEventListener("scroll", close, { passive: true });
 
-  function openPopover() {
+  function open() {
+    closePopover("morePopover", "moreTrigger");
     popover.classList.remove("hidden");
     trigger.setAttribute("aria-expanded", "true");
-    positionPopover();
+    positionPopover(trigger, popover);
   }
-  function closePopover() {
+  function close() {
     popover.classList.add("hidden");
     trigger.setAttribute("aria-expanded", "false");
-  }
-  function positionPopover() {
-    const stageRect = document.getElementById("stage").getBoundingClientRect();
-    const triggerRect = trigger.getBoundingClientRect();
-    const popoverWidth = popover.offsetWidth || 226;
-    const half = popoverWidth / 2;
-    const rawCenter = triggerRect.left - stageRect.left + triggerRect.width / 2;
-    const center = clamp(rawCenter, half + 10, stageRect.width - half - 10);
-    const bottom = Math.max(10, stageRect.bottom - triggerRect.top + 10);
-    popover.style.left = `${center}px`;
-    popover.style.bottom = `${bottom}px`;
   }
   function applyColor(color, { persist = true, switchToPen = true } = {}) {
     if (!isHexColor(color)) return;
@@ -170,8 +215,53 @@ function bindColorPicker() {
     trigger.setAttribute("aria-label", `Цвет линии: ${normalized}`);
     paletteButtons.forEach((button) => button.classList.toggle("active", button.dataset.color.toLowerCase() === normalized));
     if (persist) savePenColor(normalized);
-    if (switchToPen && input.tool !== "pen") document.querySelector('[data-tool="pen"]')?.click();
+    if (switchToPen) activateTool("pen");
   }
+}
+
+function bindMorePopover() {
+  const trigger = document.getElementById("moreTrigger");
+  const popover = document.getElementById("morePopover");
+  trigger.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const opening = popover.classList.contains("hidden");
+    closePopover("colorPopover", "colorTrigger");
+    popover.classList.toggle("hidden", !opening);
+    trigger.setAttribute("aria-expanded", String(opening));
+    if (opening) positionPopover(trigger, popover);
+  });
+  bindOutsideClose(trigger, popover, () => closePopover("morePopover", "moreTrigger"));
+  window.addEventListener("resize", () => {
+    if (!popover.classList.contains("hidden")) positionPopover(trigger, popover);
+  });
+}
+
+function bindOutsideClose(trigger, popover, close) {
+  document.addEventListener("pointerdown", (event) => {
+    if (popover.classList.contains("hidden")) return;
+    if (popover.contains(event.target) || trigger.contains(event.target)) return;
+    close();
+  }, { capture: true });
+  document.addEventListener("keydown", (event) => { if (event.key === "Escape") close(); });
+}
+
+function closePopover(popoverId, triggerId) {
+  const popover = document.getElementById(popoverId);
+  const trigger = document.getElementById(triggerId);
+  popover?.classList.add("hidden");
+  trigger?.setAttribute("aria-expanded", "false");
+}
+
+function positionPopover(trigger, popover) {
+  const stageRect = stage.getBoundingClientRect();
+  const triggerRect = trigger.getBoundingClientRect();
+  const width = popover.offsetWidth || 226;
+  const half = width / 2;
+  const rawCenter = triggerRect.left - stageRect.left + triggerRect.width / 2;
+  const center = clamp(rawCenter, half + 10, stageRect.width - half - 10);
+  const bottom = Math.max(10, stageRect.bottom - triggerRect.top + 10);
+  popover.style.left = `${center}px`;
+  popover.style.bottom = `${bottom}px`;
 }
 
 function undoLocalStroke() {
@@ -218,6 +308,7 @@ function clearBoard() {
   sendLocalEvent(event);
   localUndo.length = 0;
   localRedo.length = 0;
+  selection.clear();
   renderer.requestRender();
   updateUndoButtons();
   updateGoToLastButton();
@@ -252,6 +343,20 @@ async function copyText(text) {
   return copied;
 }
 
+function showToast(message, tone = "") {
+  const toast = document.getElementById("boardToast");
+  clearTimeout(toastTimer);
+  toast.textContent = message;
+  toast.className = `board-toast ${tone}`.trim();
+  if (tone !== "busy") {
+    toastTimer = setTimeout(() => toast.classList.add("hidden"), 1800);
+  }
+}
+
+function updateSelectionUI(keys) {
+  const button = document.getElementById("deleteSelection");
+  button.classList.toggle("hidden", !keys.length);
+}
 function updateUndoButtons() {
   document.getElementById("undo").disabled = !localUndo.some((strokeId) => state.hasStroke(strokeId));
   document.getElementById("redo").disabled = localRedo.length === 0;
@@ -269,10 +374,7 @@ function updateCameraButtons() {
   follow.setAttribute("aria-pressed", String(remoteFollow.autoFollowEnabled));
   scale.setAttribute("aria-pressed", String(remoteFollow.autoScaleEnabled));
 }
-
-function updatePresence(count) {
-  document.getElementById("participants").textContent = count === 1 ? "1 участник" : `${count} участников`;
-}
+function updatePresence(count) { document.getElementById("participants").textContent = count === 1 ? "1 участник" : `${count} участников`; }
 function updateConnection(status) {
   const dot = document.getElementById("connectionDot");
   const text = document.getElementById("connectionText");
@@ -305,7 +407,6 @@ function bindRemoteFollowInteractionGuards(targetCanvas, follow) {
   window.addEventListener("touchend", note, { capture: true, passive: true });
   targetCanvas.addEventListener("wheel", note, { capture: true, passive: true });
   document.querySelector(".toolbar")?.addEventListener("pointerdown", note, { capture: true, passive: true });
-  document.querySelector(".board-popover")?.addEventListener("pointerdown", note, { capture: true, passive: true });
   document.querySelector(".topbar")?.addEventListener("pointerdown", note, { capture: true, passive: true });
 }
 
