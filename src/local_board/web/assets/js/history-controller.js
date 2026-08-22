@@ -1,4 +1,4 @@
-import { cloneStroke } from "./board-state.js";
+import { cloneBoardObject, cloneStroke } from "./board-state.js";
 import { createId } from "./id.js";
 
 export class LocalHistoryController {
@@ -26,11 +26,30 @@ export class LocalHistoryController {
   }
 
   observeLocalEvent(event) {
-    if (event?.type !== "stroke.delete") return false;
-    const deleted = this.state.getDeletedStroke(event.stroke_id);
-    if (!deleted) return false;
-    this.pushAction({ kind: "stroke.delete", stroke: cloneStroke(deleted) });
-    return true;
+    if (!event) return false;
+
+    if (event.type === "stroke.delete") {
+      const deleted = this.state.getDeletedStroke(event.stroke_id);
+      if (!deleted) return false;
+      this.pushAction({ kind: "stroke.delete", stroke: cloneStroke(deleted) });
+      return true;
+    }
+
+    if (event.type === "object.create") {
+      const object = this.state.getObject(event.object?.id);
+      if (!object) return false;
+      this.pushAction({ kind: "object.create", object: cloneBoardObject(object) });
+      return true;
+    }
+
+    if (event.type === "object.delete") {
+      const deleted = this.state.getDeletedObject(event.object_id);
+      if (!deleted) return false;
+      this.pushAction({ kind: "object.delete", object: cloneBoardObject(deleted) });
+      return true;
+    }
+
+    return false;
   }
 
   undo() {
@@ -68,11 +87,19 @@ export class LocalHistoryController {
   inverseEvent(action) {
     if (action.kind === "stroke.create") {
       if (!this.state.hasStroke(action.stroke.id)) return null;
-      return deleteEvent(action.stroke.id);
+      return deleteStrokeEvent(action.stroke.id);
     }
     if (action.kind === "stroke.delete") {
       if (this.state.hasStroke(action.stroke.id)) return null;
-      return restoreEvent(action.stroke);
+      return restoreStrokeEvent(action.stroke);
+    }
+    if (action.kind === "object.create") {
+      if (!this.state.hasObject(action.object.id)) return null;
+      return deleteObjectEvent(action.object.id);
+    }
+    if (action.kind === "object.delete") {
+      if (this.state.hasObject(action.object.id)) return null;
+      return createObjectEvent(action.object);
     }
     return null;
   }
@@ -80,11 +107,19 @@ export class LocalHistoryController {
   forwardEvent(action) {
     if (action.kind === "stroke.create") {
       if (this.state.hasStroke(action.stroke.id)) return null;
-      return restoreEvent(action.stroke);
+      return restoreStrokeEvent(action.stroke);
     }
     if (action.kind === "stroke.delete") {
       if (!this.state.hasStroke(action.stroke.id)) return null;
-      return deleteEvent(action.stroke.id);
+      return deleteStrokeEvent(action.stroke.id);
+    }
+    if (action.kind === "object.create") {
+      if (this.state.hasObject(action.object.id)) return null;
+      return createObjectEvent(action.object);
+    }
+    if (action.kind === "object.delete") {
+      if (!this.state.hasObject(action.object.id)) return null;
+      return deleteObjectEvent(action.object.id);
     }
     return null;
   }
@@ -94,11 +129,11 @@ export class LocalHistoryController {
   }
 }
 
-function deleteEvent(strokeId) {
+function deleteStrokeEvent(strokeId) {
   return { type: "stroke.delete", op_id: createId(), stroke_id: strokeId };
 }
 
-function restoreEvent(stroke) {
+function restoreStrokeEvent(stroke) {
   return {
     type: "stroke.restore",
     op_id: createId(),
@@ -111,4 +146,14 @@ function restoreEvent(stroke) {
       points: stroke.points.map((point) => ({ ...point })),
     },
   };
+}
+
+function deleteObjectEvent(objectId) {
+  return { type: "object.delete", op_id: createId(), object_id: objectId };
+}
+
+function createObjectEvent(object) {
+  const clone = cloneBoardObject(object);
+  delete clone.author_id;
+  return { type: "object.create", op_id: createId(), object: clone };
 }
