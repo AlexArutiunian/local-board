@@ -22,6 +22,7 @@ MUTATION_TYPES = {
     "stroke.translate",
     "object.create",
     "object.update",
+    "object.reorder",
     "object.delete",
     "board.clear",
 }
@@ -193,6 +194,12 @@ def normalize_client_event(payload: Any) -> dict[str, Any]:
     elif message_type == "object.update":
         event["object_id"] = _nonempty_string(payload.get("object_id"), "object_id")
         event["patch"] = normalize_object_patch(payload.get("patch"))
+    elif message_type == "object.reorder":
+        event["object_id"] = _nonempty_string(payload.get("object_id"), "object_id")
+        position = str(payload.get("position", ""))
+        if position not in {"front", "back"}:
+            raise ProtocolError("invalid object order position")
+        event["position"] = position
     elif message_type == "object.delete":
         event["object_id"] = _nonempty_string(payload.get("object_id"), "object_id")
 
