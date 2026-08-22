@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "local-board"
-version = "0.3.0"
-description = "Realtime collaborative whiteboard with shareable rooms for iPad and browser clients"
+version = "0.4.0"
+description = "Realtime collaborative whiteboard with rooms, Apple Pencil ink, selection and image objects"
 requires-python = ">=3.10"
 dependencies = [
   "fastapi>=0.116,<1",
