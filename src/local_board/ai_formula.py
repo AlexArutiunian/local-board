@@ -7,10 +7,17 @@ from typing import Any
 import httpx
 
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_FORMULA_MODEL = "stealth/ox-alpha"
-MAX_FORMULA_IMAGE_CHARS = 6_000_000
+# Fast, vision-capable OpenRouter endpoint whose model slug itself is explicitly
+# free. Never silently route formula OCR to a paid model.
+DEFAULT_FORMULA_MODEL = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+MAX_FORMULA_IMAGE_CHARS = 3_500_000
 MAX_LATEX_CHARS = 4096
+MAX_OUTPUT_TOKENS = 192
 _IMAGE_DATA_URL_RE = re.compile(r"^data:image/(png|jpeg|webp);base64,[A-Za-z0-9+/=\r\n]+$")
+
+# Reuse connections between OCR requests. Creating a fresh TLS connection for
+# every tiny formula is noticeable in an interactive whiteboard.
+_http_client: httpx.AsyncClient | None = None
 
 
 class FormulaRecognitionError(RuntimeError):
@@ -26,6 +33,19 @@ def validate_formula_image_data_url(value: Any) -> str:
     return image
 
 
+def validate_free_formula_model(model: str) -> str:
+    value = str(model or "").strip()
+    if not value:
+        return DEFAULT_FORMULA_MODEL
+    # Keep this feature financially fail-closed. An explicit :free model is the
+    # only accepted override; a typo can never fall through to a paid endpoint.
+    if not value.endswith(":free"):
+        raise FormulaRecognitionError(
+            "OPENROUTER_FORMULA_MODEL must be an explicit :free model"
+        )
+    return value
+
+
 async def recognize_formula(
     image_data_url: str,
     *,
@@ -33,18 +53,17 @@ async def recognize_formula(
     model: str = DEFAULT_FORMULA_MODEL,
 ) -> dict[str, Any]:
     image_data_url = validate_formula_image_data_url(image_data_url)
+    model = validate_free_formula_model(model)
     if not api_key:
         raise FormulaRecognitionError("OPENROUTER_API_KEY is not configured")
 
+    # Keep the prompt and expected output deliberately tiny. Formula OCR does
+    # not need chain-of-thought; fewer output tokens materially improve latency.
     prompt = (
-        "You are a precise mathematical OCR engine. Read the mathematical expression(s) "
-        "inside the supplied crop and convert them to valid MathJax-compatible LaTeX. "
-        "Preserve variables, Greek letters, subscripts, superscripts, fractions, roots, "
-        "integrals, sums, limits, brackets, matrices and relations exactly as written. "
-        "Do not solve, simplify, explain, add commentary, or invent missing content. "
-        "Ignore drawing-selection borders and graph axes unless they are semantically part "
-        "of the expression. Return JSON only, with exactly one string field named latex. "
-        "Do not wrap the LaTeX in dollar signs or code fences."
+        "OCR only. Read the handwritten/printed mathematical expression in this crop. "
+        "Return ONLY valid MathJax LaTeX, with no dollar signs, code fence, JSON, "
+        "explanation, solution, or commentary. Preserve symbols, superscripts, "
+        "subscripts, fractions, roots, integrals, sums, brackets and relations exactly."
     )
 
     payload = {
@@ -58,12 +77,16 @@ async def recognize_formula(
                 ],
             }
         ],
-        # Ox Alpha requires reasoning. OpenRouter's gateway has a minimum
-        # reasoning budget of 1024 tokens, so max_tokens must stay above it.
-        "reasoning": {"effort": "low", "exclude": True},
-        "max_tokens": 1536,
+        "max_tokens": MAX_OUTPUT_TOKENS,
         "temperature": 0,
-        "response_format": {"type": "json_object"},
+        # The selected free Nemotron can use extended reasoning when explicitly
+        # requested. Formula OCR is a latency-sensitive perception task, so keep
+        # it off. OpenRouter ignores unsupported optional reasoning controls.
+        "reasoning": {"enabled": False},
+        "provider": {
+            "sort": "latency",
+            "allow_fallbacks": False,
+        },
     }
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -73,8 +96,8 @@ async def recognize_formula(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(55.0, connect=10.0)) as client:
-            response = await client.post(OPENROUTER_CHAT_URL, headers=headers, json=payload)
+        client = _get_http_client()
+        response = await client.post(OPENROUTER_CHAT_URL, headers=headers, json=payload)
     except httpx.HTTPError as exc:
         raise FormulaRecognitionError("OpenRouter is unreachable") from exc
 
@@ -102,6 +125,16 @@ async def recognize_formula(
     }
 
 
+def _get_http_client() -> httpx.AsyncClient:
+    global _http_client
+    if _http_client is None or _http_client.is_closed:
+        _http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(12.0, connect=4.0),
+            limits=httpx.Limits(max_keepalive_connections=4, max_connections=8),
+        )
+    return _http_client
+
+
 def extract_latex(content: Any) -> str:
     if isinstance(content, list):
         text_parts = []
@@ -111,14 +144,15 @@ def extract_latex(content: Any) -> str:
         content = "".join(text_parts)
     text = str(content or "").strip()
     if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"^```(?:latex|tex|json)?\s*", "", text, flags=re.IGNORECASE)
         text = re.sub(r"\s*```$", "", text)
+    # Keep compatibility with an older JSON-producing OCR configuration.
     try:
-        payload = json.loads(text)
+        parsed = json.loads(text)
     except json.JSONDecodeError:
-        payload = None
-    if isinstance(payload, dict):
-        text = str(payload.get("latex") or "").strip()
+        parsed = None
+    if isinstance(parsed, dict):
+        text = str(parsed.get("latex") or "").strip()
     text = text.strip().strip("$").strip()
     return text
 
