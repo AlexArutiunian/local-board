@@ -31,10 +31,18 @@
     <section class="join-card">
       <div>
         <p class="eyebrow">Уже есть комната?</p>
-        <h2>Открыть по коду или ссылке</h2>
+        <h2>Введи 4 цифры</h2>
       </div>
       <form id="joinForm">
-        <input id="roomInput" autocomplete="off" placeholder="Код комнаты или ссылка" aria-label="Код комнаты или ссылка" />
+        <input
+          id="roomInput"
+          inputmode="numeric"
+          pattern="[0-9]{4}"
+          maxlength="4"
+          autocomplete="off"
+          placeholder="0000"
+          aria-label="Четырёхзначный код комнаты"
+        />
         <button type="submit">Открыть</button>
       </form>
       <p id="joinError" class="error hidden" aria-live="polite"></p>
