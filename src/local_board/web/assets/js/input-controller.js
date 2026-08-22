@@ -146,15 +146,10 @@ export class InputController {
         }
         this.selection.cancelCrop();
         this.selection.clear();
-      } else {
-        const image = findImageAt(this.state, this.renderer, event.clientX, event.clientY);
-        if (image) {
-          this.beginImageTouch(event, image);
-          return;
-        }
-        if (this.selection?.hasSelection?.()) this.selection.clear();
       }
 
+      // Direct finger ink is an explicit mode. When enabled, Pen/Eraser must win
+      // even over an image so a student can annotate a pasted task directly.
       if (this.directInkEnabled && this.tool === "pen" && this.touchPointers.size === 0) {
         this.startSoftInk(event, "touch");
         return;
@@ -163,6 +158,15 @@ export class InputController {
       if (this.directInkEnabled && this.tool === "eraser" && this.touchPointers.size === 0) {
         this.startSoftErase(event);
         return;
+      }
+
+      if (!this.selection?.isCropping?.()) {
+        const image = findImageAt(this.state, this.renderer, event.clientX, event.clientY);
+        if (image) {
+          this.beginImageTouch(event, image);
+          return;
+        }
+        if (this.selection?.hasSelection?.()) this.selection.clear();
       }
 
       this.touchPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
