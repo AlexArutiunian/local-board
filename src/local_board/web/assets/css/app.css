@@ -11,7 +11,7 @@ html, body, #app { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 body { overscroll-behavior: none; -webkit-text-size-adjust: 100%; }
 button, input { font: inherit; }
 
-#app, #stage, #board, .topbar, .toolbar, .board-popover, .offline-banner {
+#app, #stage, #board, .topbar, .toolbar, .board-popover, .top-popover, .offline-banner {
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
@@ -37,7 +37,7 @@ button, input { font: inherit; }
   min-height: 46px;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   padding: 7px 10px;
   border: 1px solid rgba(214,211,209,.85);
   border-radius: 14px;
@@ -53,12 +53,40 @@ button, input { font: inherit; }
 .board-name { display: block; margin-top: 3px; color: #78716c; font-size: 11px; font-variant-numeric: tabular-nums; }
 .topbar-actions { justify-content: flex-end; }
 .presence { display: flex; align-items: center; gap: 7px; color: #57534e; font-size: 12px; white-space: nowrap; }
+.presence-button { min-width: auto; height: 32px; padding: 0 8px; border-color: transparent; background: transparent; box-shadow: none; }
+.presence-button:hover { background: #f5f5f4; border-color: transparent; }
 .presence-dot { width: 8px; height: 8px; border-radius: 50%; background: #a8a29e; }
 .presence-dot.online { background: #16a34a; }
 .presence-dot.connecting { background: #f59e0b; }
 .presence-dot.offline { background: #dc2626; }
 .separator { color: #d6d3d1; }
 .share-room { min-width: auto; height: 32px; padding: 0 11px; font-size: 11px; }
+
+.participant-self {
+  min-width: auto;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 7px;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+.participant-self:hover { border-color: transparent; background: #f5f5f4; }
+.role-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: .01em;
+}
+.role-badge.teacher { background: #f3e8ff; color: #7e22ce; }
+.role-badge.student { background: #e0f2fe; color: #0369a1; }
+.self-name { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: #44403c; }
 
 .toolbar {
   position: absolute;
@@ -134,18 +162,16 @@ button.danger:hover { background: #fff7f7; border-color: #fecaca; }
 .zoom-reset { min-width: 58px; padding: 0 10px; font-size: 13px; font-variant-numeric: tabular-nums; }
 .utility-button { min-width: auto; padding: 0 12px; font-size: 12px; }
 
-.board-popover { position: absolute; z-index: 14; }
-.color-popover {
-  width: 226px;
-  padding: 12px;
+.board-popover, .top-popover { position: absolute; z-index: 14; }
+.color-popover, .background-popover, .top-popover {
   border: 1px solid rgba(214,211,209,.88);
   border-radius: 17px;
   background: rgba(255,255,255,.97);
   box-shadow: 0 16px 42px rgba(28,25,23,.16), 0 3px 10px rgba(28,25,23,.06);
   backdrop-filter: blur(22px) saturate(1.15);
   -webkit-backdrop-filter: blur(22px) saturate(1.15);
-  transform: translateX(-50%);
 }
+.color-popover { width: 226px; padding: 12px; transform: translateX(-50%); }
 .popover-title { margin: 1px 2px 10px; color: #57534e; font-size: 12px; font-weight: 700; }
 .color-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
 .color-option { width: 38px; min-width: 38px; height: 38px; padding: 0; justify-self: center; border-radius: 50%; border: 3px solid #fff; background: var(--c); box-shadow: 0 0 0 1px rgba(120,113,108,.3); }
@@ -154,13 +180,66 @@ button.danger:hover { background: #fff7f7; border-color: #fecaca; }
 .custom-color-row { margin-top: 12px; padding-top: 10px; border-top: 1px solid #eeeae7; display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #57534e; font-size: 12px; font-weight: 650; }
 .custom-color-row input[type="color"] { width: 42px; height: 30px; padding: 2px; border: 1px solid #d6d3d1; border-radius: 9px; background: #fff; cursor: pointer; }
 
+.background-popover { width: 314px; padding: 12px; transform: translateX(-50%); }
+.background-pattern-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
+.background-pattern-grid button { min-width: 0; height: auto; padding: 6px; display: grid; gap: 5px; border-color: transparent; background: transparent; color: #57534e; font-size: 10px; }
+.background-pattern-grid button:hover { background: #f5f5f4; border-color: transparent; }
+.background-pattern-grid button.active { color: #1c1917; background: #f5f5f4; border-color: #a8a29e; box-shadow: none; }
+.paper-preview { width: 100%; height: 46px; border: 1px solid #e7e5e4; border-radius: 8px; background-color: #fff; overflow: hidden; }
+.preview-plain { background: #fff; }
+.preview-dots { background-color: #fff; background-image: radial-gradient(#b8b4b0 1px, transparent 1px); background-size: 10px 10px; }
+.preview-grid { background-color: #fff; background-image: linear-gradient(#ddd 1px, transparent 1px), linear-gradient(90deg, #ddd 1px, transparent 1px); background-size: 12px 12px; }
+.preview-fine-grid { background-color: #fff; background-image: linear-gradient(#e7e5e4 1px, transparent 1px), linear-gradient(90deg, #e7e5e4 1px, transparent 1px), linear-gradient(#cfcac6 1px, transparent 1px), linear-gradient(90deg, #cfcac6 1px, transparent 1px); background-size: 6px 6px, 6px 6px, 30px 30px, 30px 30px; }
+.preview-ruled { background-color: #fff; background-image: repeating-linear-gradient(to bottom, transparent 0 10px, #d6d3d1 10px 11px); }
+.preview-cornell { background-color: #fff; background-image: linear-gradient(90deg, transparent 0 26%, #cfcac6 26% 27%, transparent 27%), linear-gradient(transparent 0 25%, #cfcac6 25% 27%, transparent 27%), repeating-linear-gradient(to bottom, transparent 0 10px, #e2dfdc 10px 11px); }
+.preview-isometric { background-color: #fff; background-image: linear-gradient(30deg, #e2dfdc 1px, transparent 1px), linear-gradient(150deg, #e2dfdc 1px, transparent 1px), linear-gradient(#e2dfdc 1px, transparent 1px); background-size: 16px 9px; }
+.background-tone-title { margin-top: 12px; padding-top: 10px; border-top: 1px solid #eeeae7; }
+.background-tone-row { display: flex; gap: 9px; }
+.background-tone-row button { width: 34px; min-width: 34px; height: 34px; padding: 0; border-radius: 50%; background: var(--paper); box-shadow: 0 0 0 1px #d6d3d1 inset; }
+.background-tone-row button.active { border-color: #1c1917; background: var(--paper); box-shadow: 0 0 0 2px #1c1917; }
+
+.top-popover { top: max(68px, calc(env(safe-area-inset-top) + 56px)); right: 14px; width: 288px; padding: 10px; }
+.presence-popover { max-height: min(62vh, 460px); overflow: auto; }
+.roster-section + .roster-section { margin-top: 10px; padding-top: 10px; border-top: 1px solid #eeeae7; }
+.roster-heading { margin: 0 3px 6px; color: #78716c; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; }
+.roster-person { display: flex; align-items: center; gap: 9px; padding: 7px 6px; border-radius: 10px; }
+.roster-person.self { background: #f5f5f4; }
+.roster-avatar { width: 30px; height: 30px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 10px; background: #f3f4f6; color: #44403c; font-size: 11px; font-weight: 800; }
+.roster-person.teacher .roster-avatar { background: #f3e8ff; color: #7e22ce; }
+.roster-person.student .roster-avatar { background: #e0f2fe; color: #0369a1; }
+.roster-person strong { display: block; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.roster-person span { display: block; margin-top: 2px; color: #78716c; font-size: 10px; }
+
+.share-popover { width: 280px; }
+.share-link-option { width: 100%; min-height: 52px; height: auto; display: block; padding: 9px 10px; text-align: left; border-color: transparent; background: transparent; }
+.share-link-option:hover { border-color: transparent; background: #f5f5f4; }
+.share-link-option strong { display: block; font-size: 12px; }
+.share-link-option span { display: block; margin-top: 3px; color: #78716c; font-size: 10px; font-weight: 500; }
+
+.profile-dialog-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 18px; background: rgba(28,25,23,.20); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+.profile-dialog { width: min(390px, 100%); padding: 20px; border: 1px solid #e7e5e4; border-radius: 20px; background: #fff; box-shadow: 0 24px 70px rgba(28,25,23,.20); }
+.profile-dialog-kicker { color: #78716c; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
+.profile-dialog h2 { margin: 7px 0 5px; font-size: 21px; }
+.profile-dialog p { margin: 0 0 17px; color: #78716c; font-size: 12px; line-height: 1.45; }
+.profile-role-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 4px; border-radius: 13px; background: #f5f5f4; }
+.profile-role-switch button { width: 100%; min-width: 0; height: 38px; border-color: transparent; background: transparent; box-shadow: none; }
+.profile-role-switch button.active { background: #fff; color: #1c1917; border-color: #e7e5e4; box-shadow: 0 2px 7px rgba(28,25,23,.07); }
+.profile-role-switch button:disabled:not(.active) { display: none; }
+.profile-role-switch button:disabled.active { grid-column: 1 / -1; opacity: 1; }
+.profile-name-field { display: grid; gap: 6px; margin-top: 15px; color: #57534e; font-size: 11px; font-weight: 700; }
+.profile-name-field input { width: 100%; height: 44px; padding: 0 12px; border: 1px solid #d6d3d1; border-radius: 12px; outline: none; }
+.profile-name-field input:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,.10); }
+.profile-continue { width: 100%; margin-top: 15px; background: #1c1917; color: #fff; border-color: #1c1917; }
+
 .offline-banner { position: absolute; top: max(72px, calc(env(safe-area-inset-top) + 62px)); left: 50%; transform: translateX(-50%); max-width: calc(100% - 24px); padding: 8px 12px; border: 1px solid #fed7aa; border-radius: 10px; background: rgba(255,247,237,.96); color: #9a3412; font-size: 12px; box-shadow: 0 5px 20px rgba(124,45,18,.08); z-index: 9; }
 .hidden { display: none !important; }
 
 @media (max-width: 720px) {
   .topbar { top: max(8px, env(safe-area-inset-top)); left: 9px; right: 9px; gap: 8px; }
-  .topbar-card { min-height: 42px; padding: 5px 8px; border-radius: 12px; }
+  .topbar-card { min-height: 42px; padding: 5px 7px; border-radius: 12px; }
   .presence #connectionText, .separator { display: none; }
+  .self-name { max-width: 78px; }
+  .role-badge { padding: 0 5px; font-size: 9px; }
   .share-room { height: 30px; padding: 0 9px; }
   .toolbar { left: 10px; right: 10px; width: auto; transform: none; max-width: none; bottom: max(10px, env(safe-area-inset-bottom)); padding: 7px 8px; }
   button { min-width: 38px; height: 38px; padding: 0 8px; }
@@ -169,6 +248,8 @@ button.danger:hover { background: #fff7f7; border-color: #fecaca; }
   .width-control input { width: 66px; }
   .width-preview { display: none; }
   .utility-button { padding-left: 9px; padding-right: 9px; }
+  .top-popover { top: max(60px, calc(env(safe-area-inset-top) + 51px)); right: 9px; width: min(288px, calc(100% - 18px)); }
+  .background-popover { width: min(314px, calc(100% - 20px)); }
 }
 
 @media (max-width: 520px) {
@@ -177,6 +258,7 @@ button.danger:hover { background: #fff7f7; border-color: #fecaca; }
   .divider { margin: 0 -2px; }
   .color-trigger { min-width: 48px; }
   .zoom-reset { min-width: 52px; padding-left: 7px; padding-right: 7px; }
+  .participant-self .self-name { display: none; }
 }
 
 @media (max-width: 470px) {
@@ -184,5 +266,5 @@ button.danger:hover { background: #fff7f7; border-color: #fecaca; }
   .board-name { max-width: 72px; }
   .share-room { font-size: 0; width: 34px; padding: 0; }
   .share-room::after { content: "↗"; font-size: 16px; }
-  .topbar-actions { gap: 7px; }
+  .topbar-actions { gap: 4px; }
 }
