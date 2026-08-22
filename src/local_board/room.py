@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from collections import deque
 from typing import Any
 
 from fastapi import WebSocket
 
+from .activity import compact_numeric_dict, now_ms, stroke_activity_summary
 from .models import BoardObject, Stroke
 from .protocol import MAX_POINTS_PER_STROKE, ProtocolError, normalize_background
 from .storage import JsonBoardStore
@@ -80,14 +80,7 @@ class BoardRoom:
     async def connect(self, client_id: str, websocket: WebSocket, profile: dict[str, str]) -> None:
         self.clients[client_id] = websocket
         self.client_profiles[client_id] = dict(profile)
-        await self._log_activity(
-            {
-                "v": 1,
-                "t": now_ms(),
-                "k": "join",
-                "actor": self._actor(client_id),
-            }
-        )
+        await self._log_activity({"v": 1, "t": now_ms(), "k": "join", "actor": self._actor(client_id)})
         presence = self.presence_payload()
         await websocket.send_json(
             {
@@ -313,8 +306,7 @@ class BoardRoom:
         base = {"v": 1, "t": timestamp_ms, "k": event_type, "rev": revision, "actor": actor}
 
         if event_type == "stroke.begin":
-            stroke_id = event["stroke"]["id"]
-            self._remember_stroke_start(stroke_id, timestamp_ms)
+            self._remember_stroke_start(event["stroke"]["id"], timestamp_ms)
             return None
 
         if event_type == "stroke.append":
@@ -331,7 +323,7 @@ class BoardRoom:
                 "sid": stroke.id,
                 "t0": start_ms,
                 "ms": max(0, timestamp_ms - start_ms),
-                **stroke_activity_summary(stroke),
+                **stroke_activity_summary(stroke, include_path=True),
             }
 
         if event_type == "stroke.delete":
@@ -459,41 +451,3 @@ class RoomManager:
                 room = BoardRoom(board_id, self.store, document)
                 self.rooms[board_id] = room
             return room
-
-
-def now_ms() -> int:
-    return time.time_ns() // 1_000_000
-
-
-def stroke_activity_summary(stroke: Stroke) -> dict[str, Any]:
-    points = stroke.points
-    summary: dict[str, Any] = {
-        "points": len(points),
-        "color": stroke.color,
-        "width": round(float(stroke.width), 2),
-        "pointer": stroke.pointer_type,
-    }
-    if not points:
-        return summary
-
-    min_x = max_x = float(points[0]["x"])
-    min_y = max_y = float(points[0]["y"])
-    for point in points[1:]:
-        x = float(point["x"])
-        y = float(point["y"])
-        min_x = min(min_x, x)
-        min_y = min(min_y, y)
-        max_x = max(max_x, x)
-        max_y = max(max_y, y)
-    summary["bbox"] = [round(min_x, 2), round(min_y, 2), round(max_x, 2), round(max_y, 2)]
-    return summary
-
-
-def compact_numeric_dict(payload: dict[str, Any]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in payload.items():
-        if isinstance(value, float):
-            result[key] = round(value, 4)
-        else:
-            result[key] = value
-    return result
