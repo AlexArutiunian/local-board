@@ -7,13 +7,7 @@ export function bindPenUiControls(root = document) {
     if (event.pointerType !== "pen") return;
     const target = actionableTarget(event.target);
     if (!target) return;
-    active = {
-      pointerId: event.pointerId,
-      target,
-      x: event.clientX,
-      y: event.clientY,
-      time: performance.now(),
-    };
+    active = { pointerId: event.pointerId, target, x: event.clientX, y: event.clientY, time: performance.now() };
   }, { capture: true, passive: true });
 
   root.addEventListener("pointercancel", (event) => {
@@ -29,10 +23,6 @@ export function bindPenUiControls(root = document) {
     if (performance.now() - started.time > 900) return;
     if (Math.hypot(event.clientX - started.x, event.clientY - started.y) > 10) return;
     if (target.matches('input[type="range"], input[type="color"], input[type="text"]')) return;
-
-    // iPad Safari is inconsistent about synthesizing click after a Pencil tap on
-    // app-style controls. Trigger the same semantic click ourselves, then swallow
-    // only the duplicate native click that may follow.
     suppressTarget = target;
     suppressUntil = performance.now() + 450;
     target.click();
@@ -43,7 +33,7 @@ export function bindPenUiControls(root = document) {
       suppressTarget = null;
       return;
     }
-    if (event.target === suppressTarget && event.detail > 0) {
+    if (actionableTarget(event.target) === suppressTarget && event.detail > 0) {
       event.preventDefault();
       event.stopImmediatePropagation();
       suppressTarget = null;
