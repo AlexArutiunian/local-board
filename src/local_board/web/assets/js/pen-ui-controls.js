@@ -1,4 +1,9 @@
+const boundRoots = new WeakSet();
+
 export function bindPenUiControls(root = document) {
+  if (!root || boundRoots.has(root)) return;
+  boundRoots.add(root);
+
   let active = null;
   let suppressTarget = null;
   let suppressUntil = 0;
