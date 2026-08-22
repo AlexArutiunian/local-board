@@ -31,7 +31,6 @@ const selection = new SelectionController({
   renderer,
   clientId,
   sendEvent: sendLocalEvent,
-  onSelectionChange: updateSelectionUI,
 });
 
 const input = new InputController({
@@ -94,7 +93,6 @@ updateGoToLastButton();
 updateCameraButtons();
 updateDirectInkButton();
 updateZoomButton(renderer.view);
-updateSelectionUI([]);
 
 window.addEventListener("beforeunload", () => realtime.close());
 document.addEventListener("visibilitychange", () => {
@@ -132,13 +130,6 @@ function bindToolbar() {
       : "Палец и мышь снова двигают холст");
   });
 
-  document.getElementById("cropSelection").addEventListener("click", () => {
-    activateTool("select");
-    if (!selection.startCrop()) showToast("Сначала выбери одну картинку");
-  });
-  document.getElementById("cropApply").addEventListener("click", () => selection.applyCrop());
-  document.getElementById("cropCancel").addEventListener("click", () => selection.cancelCrop());
-  document.getElementById("deleteSelection").addEventListener("click", () => selection.deleteSelected());
   document.getElementById("undo").addEventListener("click", undoLocalAction);
   document.getElementById("redo").addEventListener("click", redoLocalAction);
   document.getElementById("goToLast").addEventListener("click", () => remoteFollow.goToLastWritten());
@@ -339,24 +330,6 @@ function showToast(message, tone = "") {
   toast.textContent = message;
   toast.className = `board-toast ${tone}`.trim();
   if (tone !== "busy") toastTimer = setTimeout(() => toast.classList.add("hidden"), 1800);
-}
-
-function updateSelectionUI(keys) {
-  const cropping = selection.isCropping();
-  const deleteButton = document.getElementById("deleteSelection");
-  const cropButton = document.getElementById("cropSelection");
-  const cropApply = document.getElementById("cropApply");
-  const cropCancel = document.getElementById("cropCancel");
-  const canCrop = keys.length === 1 && isImageKey(keys[0]);
-  deleteButton.classList.toggle("hidden", !keys.length || cropping);
-  cropButton.classList.toggle("hidden", !canCrop || cropping);
-  cropApply.classList.toggle("hidden", !cropping);
-  cropCancel.classList.toggle("hidden", !cropping);
-}
-
-function isImageKey(key) {
-  if (typeof key !== "string" || !key.startsWith("object:")) return false;
-  return state.getObject(key.slice("object:".length))?.kind === "image";
 }
 
 function updateUndoButtons() {
