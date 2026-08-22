@@ -1,5 +1,6 @@
 import { FormulaTransformController } from "./formula-transform.js";
 import { InputController } from "./input-controller.js";
+import { installAreaSelection } from "./selection-area.js";
 import { installSelectionProductivity } from "./selection-productivity.js";
 
 // Keep Select semantics modular and attach them to the concrete InputController
@@ -21,6 +22,16 @@ if (!InputController.prototype.__selectionProductivityBootstrap) {
       sendEvent: this.sendEvent,
       history,
       showToast: showBoardToast,
+    });
+
+    // Marquee is an area selection, not merely a visual rectangle. Recompute
+    // every intersecting stroke/object on release and then let the productivity
+    // toolbar react to that committed multi-item group immediately.
+    installAreaSelection({
+      selection: this.selection,
+      state: this.state,
+      renderer: this.renderer,
+      productivity,
     });
 
     installSelectionEndRecovery(this, productivity);
