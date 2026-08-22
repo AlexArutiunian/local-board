@@ -67,6 +67,7 @@ export class PencilEngine {
       color,
       width,
       pointer_type: "pen",
+      source_zoom: this.renderer.view.zoom,
       points: [firstPoint],
     };
     const mutation = this.withOp({ type: "stroke.begin", stroke });
@@ -121,8 +122,6 @@ export class PencilEngine {
       this.sendEvent(mutation);
       this.onStrokeFinished(strokeId);
 
-      // The stroke just moved from the lightweight live layer to the cached
-      // completed layer. Rebuild that cache once, not on every move.
       this.renderer.invalidateBase();
       this.renderer.requestRender();
     }
