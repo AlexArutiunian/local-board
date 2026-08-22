@@ -17,6 +17,14 @@ export class CanvasRenderer {
     this.baseDirty = true;
     this.cachedBaseGeneration = -1;
 
+    // Remote-writer following moves only this browser's camera. New remote points
+    // can retarget the animation while it is running, producing a soft tracking
+    // motion instead of discrete jumps between WebSocket packets.
+    this.followHandle = null;
+    this.followTarget = null;
+    this.followLastTimestamp = null;
+    this.prefersReducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
+
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(canvas.parentElement);
     this.resize();
@@ -41,6 +49,7 @@ export class CanvasRenderer {
   }
 
   resize() {
+    this.cancelFollowAnimation();
     const rect = this.canvas.parentElement.getBoundingClientRect();
     this.dpr = Math.max(1, window.devicePixelRatio || 1);
     const pixelWidth = Math.max(1, Math.round(rect.width * this.dpr));
@@ -54,6 +63,13 @@ export class CanvasRenderer {
     this.canvas.style.height = `${rect.height}px`;
     this.invalidateBase();
     this.render();
+  }
+
+  getViewportSize() {
+    return {
+      width: this.canvas.width / this.dpr,
+      height: this.canvas.height / this.dpr,
+    };
   }
 
   invalidateBase() {
@@ -187,7 +203,85 @@ export class CanvasRenderer {
     };
   }
 
+  smoothPanBy(dx, dy) {
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) return;
+    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
+
+    this.followTarget = {
+      x: this.view.x + dx,
+      y: this.view.y + dy,
+    };
+
+    if (this.prefersReducedMotion) {
+      this.view.x = this.followTarget.x;
+      this.view.y = this.followTarget.y;
+      this.followTarget = null;
+      this.invalidateBase();
+      this.requestRender();
+      this.saveView();
+      return;
+    }
+
+    if (this.followHandle === null) {
+      this.followLastTimestamp = null;
+      this.followHandle = requestAnimationFrame((timestamp) => this.stepFollow(timestamp));
+    }
+  }
+
+  stepFollow(timestamp) {
+    this.followHandle = null;
+    if (!this.followTarget) return;
+
+    const previous = this.followLastTimestamp ?? timestamp - 16.67;
+    const dt = clamp(timestamp - previous, 8, 50);
+    this.followLastTimestamp = timestamp;
+
+    const remainingX = this.followTarget.x - this.view.x;
+    const remainingY = this.followTarget.y - this.view.y;
+    const alpha = 1 - Math.exp(-dt / 82);
+
+    this.view.x += remainingX * alpha;
+    this.view.y += remainingY * alpha;
+    this.invalidateBase();
+    this.renderFollowFrame();
+
+    const afterX = this.followTarget.x - this.view.x;
+    const afterY = this.followTarget.y - this.view.y;
+    if (Math.hypot(afterX, afterY) < 0.55) {
+      this.view.x = this.followTarget.x;
+      this.view.y = this.followTarget.y;
+      this.followTarget = null;
+      this.followLastTimestamp = null;
+      this.invalidateBase();
+      this.renderFollowFrame();
+      this.saveView();
+      return;
+    }
+
+    this.followHandle = requestAnimationFrame((nextTimestamp) => this.stepFollow(nextTimestamp));
+  }
+
+  renderFollowFrame() {
+    // If realtime input already queued a paint for this frame, absorb it into the
+    // camera paint instead of drawing twice.
+    if (this.renderHandle !== null) {
+      cancelAnimationFrame(this.renderHandle);
+      this.renderHandle = null;
+    }
+    this.render();
+  }
+
+  cancelFollowAnimation() {
+    if (this.followHandle !== null) {
+      cancelAnimationFrame(this.followHandle);
+      this.followHandle = null;
+    }
+    this.followTarget = null;
+    this.followLastTimestamp = null;
+  }
+
   panBy(dx, dy) {
+    this.cancelFollowAnimation();
     this.view.x += dx;
     this.view.y += dy;
     this.invalidateBase();
@@ -195,6 +289,7 @@ export class CanvasRenderer {
   }
 
   zoomAt(clientX, clientY, newZoom) {
+    this.cancelFollowAnimation();
     const rect = this.canvas.getBoundingClientRect();
     const sx = clientX - rect.left;
     const sy = clientY - rect.top;
@@ -207,6 +302,7 @@ export class CanvasRenderer {
   }
 
   resetView() {
+    this.cancelFollowAnimation();
     this.view = { x: 0, y: 0, zoom: 1 };
     this.saveView();
     this.invalidateBase();
