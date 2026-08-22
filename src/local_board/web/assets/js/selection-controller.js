@@ -25,6 +25,7 @@ export class SelectionController {
     this.originals = new Map();
     this.lastDelta = { dx: 0, dy: 0 };
     this.marqueeAdditive = false;
+    this.bindRightMouseShortcut();
     this.bindKeyboard();
   }
 
@@ -51,9 +52,8 @@ export class SelectionController {
     this.anchor = world;
     this.lastDelta = { dx: 0, dy: 0 };
 
-    // Right-mouse temporary selection is always a marquee gesture. It must not
-    // accidentally grab/move the object under the initial click.
     if (forceMarquee) {
+      if (!additive) this.clear();
       this.startMarquee(world, additive);
       return true;
     }
@@ -92,9 +92,9 @@ export class SelectionController {
   pointerMove(event) {
     if (!this.ownsPointer(event.pointerId) || !this.mode) return false;
 
-    // Defensive mouse recovery: if the release event was lost, `buttons`
-    // still tells us that the initiating button is no longer down. Finish the
-    // gesture immediately instead of leaving a sticky marquee on screen.
+    // If a browser loses the matching pointerup, `buttons` still exposes that
+    // the initiating mouse button is physically no longer pressed. Finalize
+    // immediately so a marquee can never remain stuck to the cursor.
     if (this.activePointerType === "mouse"
       && this.requiredButtonMask !== 0
       && (Number(event.buttons || 0) & this.requiredButtonMask) === 0) {
@@ -138,14 +138,17 @@ export class SelectionController {
     }
 
     this.renderer.setMarquee(null);
+    this.releasePointerCapture(event.pointerId);
     this.finishGestureState();
     this.renderer.requestRender();
     return true;
   }
 
   cancelPointer() {
+    const pointerId = this.activePointerId;
     if (this.mode === "move" || this.mode === "resize") this.restoreOriginals();
     this.renderer.setMarquee(null);
+    this.releasePointerCapture(pointerId);
     this.finishGestureState();
     this.renderer.requestRender();
   }
@@ -165,6 +168,32 @@ export class SelectionController {
     this.originals.clear();
     this.lastDelta = { dx: 0, dy: 0 };
     this.marqueeAdditive = false;
+  }
+
+  bindRightMouseShortcut() {
+    this.canvas.addEventListener("pointerdown", (event) => {
+      if (event.pointerType !== "mouse" || event.button !== 2) return;
+      if (event.cancelable) event.preventDefault();
+
+      // This is a temporary gesture, not a tool switch. Consume the RMB down
+      // before InputController sees it; subsequent move/up events are already
+      // routed there to this controller while we own the pointer id.
+      event.stopImmediatePropagation();
+      if (this.activePointerId !== null) this.cancelPointer();
+      this.pointerDown(event, { forceMarquee: true });
+      try {
+        this.canvas.setPointerCapture?.(event.pointerId);
+      } catch (_) {}
+    }, { capture: true, passive: false });
+  }
+
+  releasePointerCapture(pointerId) {
+    if (pointerId === null || pointerId === undefined) return;
+    try {
+      if (this.canvas.hasPointerCapture?.(pointerId)) {
+        this.canvas.releasePointerCapture(pointerId);
+      }
+    } catch (_) {}
   }
 
   deleteSelected() {
