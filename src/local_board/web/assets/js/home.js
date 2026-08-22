@@ -41,7 +41,7 @@ function renderRooms(rooms) {
   for (const room of rooms) {
     const card = document.createElement("a");
     card.className = "board-card";
-    card.href = room.path;
+    card.href = `${room.path}?role=teacher`;
 
     const contentCount = Number(room.stroke_count || 0) + Number(room.object_count || 0);
     const contentLabel = contentCount === 1 ? "1 объект" : `${contentCount} объектов`;
@@ -69,7 +69,7 @@ async function createRoom() {
     const response = await fetch("/api/rooms", { method: "POST" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const room = await response.json();
-    location.assign(room.path);
+    location.assign(`${room.path}?role=teacher`);
   } catch (error) {
     console.error("Room creation failed:", error);
     createStatus.textContent = "Не удалось создать доску";
@@ -95,7 +95,7 @@ async function openRoom(event) {
       return;
     }
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    location.assign(`/b/${roomId}`);
+    location.assign(`/b/${roomId}?role=teacher`);
   } catch (error) {
     console.error("Room lookup failed:", error);
     showJoinError("Не удалось проверить комнату.");
