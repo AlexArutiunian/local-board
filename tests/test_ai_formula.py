@@ -1,11 +1,8 @@
-import asyncio
 import os
-import time
 
 import pytest
 from fastapi.testclient import TestClient
 
-import local_board.ai_formula as ai_formula
 from local_board.ai_formula import (
     DEFAULT_FORMULA_MODEL,
     FormulaNotFoundError,
@@ -37,24 +34,19 @@ def test_validate_formula_image_data_url():
     assert validate_formula_image_data_url(value) == value
 
 
-def test_formula_models_are_fail_closed_to_free_only():
-    assert DEFAULT_FORMULA_MODEL == "qwen/qwen2.5-vl-32b-instruct:free"
+def test_formula_model_defaults_to_current_free_ox_alpha():
+    assert DEFAULT_FORMULA_MODEL == "stealth/ox-alpha"
     assert validate_free_formula_model(DEFAULT_FORMULA_MODEL) == DEFAULT_FORMULA_MODEL
-    assert validate_free_formula_model("google/gemma-4-31b-it-20260402:free") == DEFAULT_FORMULA_MODEL
-    assert validate_free_formula_model("stealth/ox-alpha") == DEFAULT_FORMULA_MODEL
+    assert validate_free_formula_model("qwen/qwen2.5-vl-32b-instruct:free") == DEFAULT_FORMULA_MODEL
+    assert validate_free_formula_model("google/gemma-4-31b-it:free") == DEFAULT_FORMULA_MODEL
     assert validate_free_formula_model("openrouter/free") == DEFAULT_FORMULA_MODEL
+    assert validate_free_formula_model("some/current-model:free") == "some/current-model:free"
     with pytest.raises(FormulaRecognitionError):
         validate_free_formula_model("google/gemini-3.1-flash-lite")
 
 
-def test_formula_candidates_are_only_explicit_free_qwen_vl_routes():
-    candidates = formula_model_candidates(DEFAULT_FORMULA_MODEL)
-    assert candidates == [
-        DEFAULT_FORMULA_MODEL,
-        "qwen/qwen2.5-vl-72b-instruct:free",
-    ]
-    assert all(item.endswith(":free") for item in candidates)
-    assert all("qwen2.5-vl" in item for item in candidates)
+def test_formula_candidates_do_not_race_unrelated_models():
+    assert formula_model_candidates(DEFAULT_FORMULA_MODEL) == [DEFAULT_FORMULA_MODEL]
 
 
 def test_no_formula_and_safety_output_detection():
@@ -64,86 +56,6 @@ def test_no_formula_and_safety_output_detection():
     assert looks_like_non_formula_output("UserSafety: safe")
     assert looks_like_non_formula_output("unsafe category: something")
     assert not looks_like_non_formula_output(r"x^2-2x+1=0")
-
-
-def test_hedged_formula_ocr_uses_second_qwen_only_when_primary_is_slow(monkeypatch):
-    calls = []
-    second = "qwen/qwen2.5-vl-72b-instruct:free"
-
-    async def fake_recognize(image_data_url, *, api_key, model):
-        calls.append(model)
-        if model == DEFAULT_FORMULA_MODEL:
-            await asyncio.sleep(0.12)
-            return {"latex": "x^2-2x+1=0", "model": model, "usage": None}
-        if model == second:
-            await asyncio.sleep(0.005)
-            return {"latex": "x^2-2x+1=0", "model": model, "usage": None}
-        raise AssertionError(f"unexpected model {model}")
-
-    monkeypatch.setattr(ai_formula, "_recognize_with_model", fake_recognize)
-    monkeypatch.setattr(ai_formula, "FALLBACK_HEDGE_SECONDS", 0.01)
-    monkeypatch.setattr(ai_formula, "TOTAL_OCR_TIMEOUT_SECONDS", 0.20)
-
-    started = time.perf_counter()
-    result = asyncio.run(
-        ai_formula.recognize_formula(
-            "data:image/png;base64,iVBORw0KGgo=",
-            api_key="test-key",
-        )
-    )
-    elapsed = time.perf_counter() - started
-
-    assert result["latex"] == "x^2-2x+1=0"
-    assert result["model"] == second
-    assert calls[:2] == [DEFAULT_FORMULA_MODEL, second]
-    assert elapsed < 0.08
-    assert result["elapsed_ms"] < 80
-
-
-def test_provider_error_launches_second_qwen_immediately(monkeypatch):
-    calls = []
-    second = "qwen/qwen2.5-vl-72b-instruct:free"
-
-    async def fake_recognize(image_data_url, *, api_key, model):
-        calls.append(model)
-        if model == DEFAULT_FORMULA_MODEL:
-            raise FormulaProviderUnavailableError("OpenRouter 429: Provider returned error")
-        return {"latex": "2x+4=0", "model": model, "usage": None}
-
-    monkeypatch.setattr(ai_formula, "_recognize_with_model", fake_recognize)
-    monkeypatch.setattr(ai_formula, "FALLBACK_HEDGE_SECONDS", 10.0)
-    monkeypatch.setattr(ai_formula, "TOTAL_OCR_TIMEOUT_SECONDS", 0.20)
-
-    result = asyncio.run(
-        ai_formula.recognize_formula(
-            "data:image/png;base64,iVBORw0KGgo=",
-            api_key="test-key",
-        )
-    )
-    assert result["latex"] == "2x+4=0"
-    assert calls == [DEFAULT_FORMULA_MODEL, second]
-
-
-def test_fast_primary_does_not_launch_fallback(monkeypatch):
-    calls = []
-
-    async def fake_recognize(image_data_url, *, api_key, model):
-        calls.append(model)
-        await asyncio.sleep(0.001)
-        return {"latex": "2x+4=0", "model": model, "usage": None}
-
-    monkeypatch.setattr(ai_formula, "_recognize_with_model", fake_recognize)
-    monkeypatch.setattr(ai_formula, "FALLBACK_HEDGE_SECONDS", 0.05)
-    monkeypatch.setattr(ai_formula, "TOTAL_OCR_TIMEOUT_SECONDS", 0.20)
-
-    result = asyncio.run(
-        ai_formula.recognize_formula(
-            "data:image/png;base64,iVBORw0KGgo=",
-            api_key="test-key",
-        )
-    )
-    assert result["latex"] == "2x+4=0"
-    assert calls == [DEFAULT_FORMULA_MODEL]
 
 
 def test_formula_endpoint_requires_server_side_key(tmp_path, monkeypatch):
@@ -177,7 +89,7 @@ def test_formula_endpoint_distinguishes_no_formula_from_provider_outage(tmp_path
     assert response.status_code == 422
 
     async def unavailable(*args, **kwargs):
-        raise FormulaProviderUnavailableError("Бесплатные OCR-модели временно недоступны")
+        raise FormulaProviderUnavailableError("Ox Alpha temporarily unavailable")
 
     monkeypatch.setattr("local_board.main.recognize_formula", unavailable)
     with TestClient(app) as client:
