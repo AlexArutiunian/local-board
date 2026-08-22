@@ -1,24 +1,53 @@
+import { FormulaTransformController } from "./formula-transform.js";
 import { InputController } from "./input-controller.js";
 import { installSelectionProductivity } from "./selection-productivity.js";
 
-// App constructs SelectionController first and InputController second. Patching
-// bind() here keeps the feature modular: the normal input event listeners are
-// installed unchanged, then Select-mode routing/productivity is attached to the
-// concrete pair. The listeners call this.onPointerDown dynamically, so the
-// small routing wrapper installed by selection-productivity is respected.
+// Keep Select semantics modular and attach them to the concrete InputController
+// instance after its normal listeners are installed. Module is loaded before
+// app.js from index.html, so the constructor used by the app is already patched.
 if (!InputController.prototype.__selectionProductivityBootstrap) {
   const originalBind = InputController.prototype.bind;
   InputController.prototype.bind = function bindWithSelectionProductivity() {
     originalBind.call(this);
     if (!this.selection || this.selection.__selectionProductivityInstalled) return;
     this.selection.__selectionProductivityInstalled = true;
+
     installSelectionProductivity({
       selection: this.selection,
       input: this,
       state: this.state,
       renderer: this.renderer,
       sendEvent: this.sendEvent,
+      showToast: showBoardToast,
+    });
+
+    new FormulaTransformController({
+      boardId: resolveBoardId(),
+      selection: this.selection,
+      state: this.state,
+      renderer: this.renderer,
+      sendEvent: this.sendEvent,
+      clientId: this.clientId,
+      showToast: showBoardToast,
     });
   };
   InputController.prototype.__selectionProductivityBootstrap = true;
+}
+
+function resolveBoardId() {
+  const match = location.pathname.match(/^\/b\/([^/]+)$/);
+  return match ? decodeURIComponent(match[1]) : "";
+}
+
+let toastTimer = null;
+function showBoardToast(message, type = "") {
+  const node = document.getElementById("boardToast");
+  if (!node) return;
+  if (toastTimer) clearTimeout(toastTimer);
+  node.textContent = String(message || "");
+  node.classList.remove("hidden", "error", "success");
+  if (type === "error") node.classList.add("error");
+  else if (type === "success") node.classList.add("success");
+  if (type === "busy") return;
+  toastTimer = setTimeout(() => node.classList.add("hidden"), 2400);
 }
