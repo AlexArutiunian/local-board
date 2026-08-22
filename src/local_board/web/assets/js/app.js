@@ -1,6 +1,7 @@
 import { AssetController } from "./asset-controller.js";
-import { BoardState, cloneStroke } from "./board-state.js";
+import { BoardState } from "./board-state.js";
 import { CanvasRenderer } from "./canvas-renderer.js";
+import { LocalHistoryController } from "./history-controller.js";
 import { InputController } from "./input-controller.js";
 import { createInputDiagnostics } from "./input-diagnostics.js";
 import { RealtimeClient } from "./realtime-client.js";
@@ -15,9 +16,8 @@ const canvas = document.getElementById("board");
 const stage = document.getElementById("stage");
 const renderer = new CanvasRenderer(canvas, state, boardId);
 const remoteFollow = new RemoteFollowController({ renderer, localClientId: clientId });
-const localUndo = [];
-const localRedo = [];
 const inputDebug = createInputDiagnostics();
+const history = new LocalHistoryController({ state, onChange: updateUndoButtons });
 let toastTimer = null;
 let realtime;
 
@@ -41,11 +41,7 @@ const input = new InputController({
   clientId,
   selection,
   sendEvent: sendLocalEvent,
-  onStrokeFinished: (strokeId) => {
-    localUndo.push(strokeId);
-    localRedo.length = 0;
-    updateUndoButtons();
-  },
+  onStrokeFinished: (strokeId) => history.recordCreatedStroke(strokeId),
 });
 
 new AssetController({
@@ -103,7 +99,8 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && realtime.socket?.readyState === WebSocket.CLOSED) realtime.connect();
 });
 
-function sendLocalEvent(event) {
+function sendLocalEvent(event, { recordHistory = true } = {}) {
+  if (recordHistory) history.observeLocalEvent(event);
   remoteFollow.observeLocal(event);
   updateGoToLastButton();
   realtime.send(event);
@@ -125,8 +122,8 @@ function bindToolbar() {
   });
 
   document.getElementById("deleteSelection").addEventListener("click", () => selection.deleteSelected());
-  document.getElementById("undo").addEventListener("click", undoLocalStroke);
-  document.getElementById("redo").addEventListener("click", redoLocalStroke);
+  document.getElementById("undo").addEventListener("click", undoLocalAction);
+  document.getElementById("redo").addEventListener("click", redoLocalAction);
   document.getElementById("goToLast").addEventListener("click", () => remoteFollow.goToLastWritten());
   document.getElementById("zoomReset").addEventListener("click", () => renderer.resetZoom());
   document.getElementById("autoFollow").addEventListener("click", () => {
@@ -162,7 +159,7 @@ function bindKeyboardShortcuts() {
     const key = event.key.toLowerCase();
     if ((event.ctrlKey || event.metaKey) && key === "z") {
       event.preventDefault();
-      event.shiftKey ? redoLocalStroke() : undoLocalStroke();
+      event.shiftKey ? redoLocalAction() : undoLocalAction();
       return;
     }
     if (event.ctrlKey || event.metaKey || event.altKey) return;
@@ -264,39 +261,19 @@ function positionPopover(trigger, popover) {
   popover.style.bottom = `${bottom}px`;
 }
 
-function undoLocalStroke() {
-  while (localUndo.length) {
-    const strokeId = localUndo.pop();
-    const stroke = state.getStroke(strokeId);
-    if (!stroke) continue;
-    localRedo.push(cloneStroke(stroke));
-    const event = { type: "stroke.delete", op_id: createId(), stroke_id: strokeId };
-    state.applyEvent(event, null, clientId);
-    sendLocalEvent(event);
-    renderer.requestRender();
-    break;
-  }
-  updateUndoButtons();
+function undoLocalAction() {
+  applyHistoryEvent(history.undo());
 }
 
-function redoLocalStroke() {
-  const stroke = localRedo.pop();
-  if (!stroke) return;
-  const event = {
-    type: "stroke.restore",
-    op_id: createId(),
-    stroke: {
-      id: stroke.id,
-      color: stroke.color,
-      width: stroke.width,
-      pointer_type: stroke.pointer_type,
-      source_zoom: stroke.source_zoom,
-      points: stroke.points,
-    },
-  };
+function redoLocalAction() {
+  applyHistoryEvent(history.redo());
+}
+
+function applyHistoryEvent(event) {
+  if (!event) return;
   state.applyEvent(event, null, clientId);
-  sendLocalEvent(event);
-  localUndo.push(stroke.id);
+  sendLocalEvent(event, { recordHistory: false });
+  selection.setSelection(selection.keys());
   renderer.requestRender();
   updateUndoButtons();
 }
@@ -305,9 +282,8 @@ function clearBoard() {
   if (!confirm("Очистить эту доску у всех подключённых участников?")) return;
   const event = { type: "board.clear", op_id: createId() };
   state.applyEvent(event, null, clientId);
-  sendLocalEvent(event);
-  localUndo.length = 0;
-  localRedo.length = 0;
+  sendLocalEvent(event, { recordHistory: false });
+  history.clear();
   selection.clear();
   renderer.requestRender();
   updateUndoButtons();
@@ -358,8 +334,8 @@ function updateSelectionUI(keys) {
   button.classList.toggle("hidden", !keys.length);
 }
 function updateUndoButtons() {
-  document.getElementById("undo").disabled = !localUndo.some((strokeId) => state.hasStroke(strokeId));
-  document.getElementById("redo").disabled = localRedo.length === 0;
+  document.getElementById("undo").disabled = !history.canUndo();
+  document.getElementById("redo").disabled = !history.canRedo();
 }
 function updateGoToLastButton() { document.getElementById("goToLast").disabled = !remoteFollow.hasLastWritten(); }
 function updateZoomButton(view) {
