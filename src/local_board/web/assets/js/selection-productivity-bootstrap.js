@@ -13,7 +13,7 @@ if (!InputController.prototype.__selectionProductivityBootstrap) {
     this.selection.__selectionProductivityInstalled = true;
     const history = globalThis.__localBoardHistory || null;
 
-    installSelectionProductivity({
+    const productivity = installSelectionProductivity({
       selection: this.selection,
       input: this,
       state: this.state,
@@ -22,6 +22,8 @@ if (!InputController.prototype.__selectionProductivityBootstrap) {
       history,
       showToast: showBoardToast,
     });
+
+    installSelectionEndRecovery(this, productivity);
 
     new FormulaTransformController({
       boardId: resolveBoardId(),
@@ -34,6 +36,67 @@ if (!InputController.prototype.__selectionProductivityBootstrap) {
     });
   };
   InputController.prototype.__selectionProductivityBootstrap = true;
+}
+
+// Safari/iPad can occasionally transition Pencil from contact to hover without
+// delivering the pointerup that commits a marquee. The visual symptom is a
+// light-blue dashed rectangle that remains on screen and never becomes a real
+// selection, so no contextual actions can appear. Recover that edge by treating
+// a no-contact Pencil move (pressure=0/buttons=0) or a lost pointer capture as
+// the end of the current Select gesture.
+function installSelectionEndRecovery(input, productivity) {
+  const selection = input.selection;
+  const canvas = input.canvas;
+  let lastPoint = null;
+  let finishing = false;
+
+  const remember = (event) => {
+    if (!selection.ownsPointer(event.pointerId)) return;
+    lastPoint = {
+      pointerId: event.pointerId,
+      pointerType: event.pointerType || selection.activePointerType || "mouse",
+      clientX: Number(event.clientX),
+      clientY: Number(event.clientY),
+      pressure: Number(event.pressure || 0),
+      buttons: Number(event.buttons || 0),
+    };
+  };
+
+  canvas.addEventListener("pointerdown", remember, { passive: true });
+
+  window.addEventListener("pointermove", (event) => {
+    if (!selection.ownsPointer(event.pointerId)) return;
+    remember(event);
+    if (event.pointerType !== "pen") return;
+    if (Number(event.pressure || 0) > 0 || Number(event.buttons || 0) !== 0) return;
+    finish(event);
+  }, { capture: true, passive: true });
+
+  canvas.addEventListener("lostpointercapture", (event) => {
+    if (!selection.ownsPointer(event.pointerId)) return;
+    const fallback = lastPoint || {
+      pointerId: event.pointerId,
+      pointerType: selection.activePointerType || "mouse",
+      clientX: Number(selection.screenAnchor?.x || 0),
+      clientY: Number(selection.screenAnchor?.y || 0),
+      pressure: 0,
+      buttons: 0,
+    };
+    finish(fallback);
+  }, { passive: true });
+
+  function finish(event) {
+    if (finishing || !selection.ownsPointer(event.pointerId)) return;
+    finishing = true;
+    try {
+      selection.pointerUp(event);
+      if (input.selectionTouchPointerId === event.pointerId) input.clearSelectionTouchTracking?.();
+      productivity?.sync?.();
+    } finally {
+      finishing = false;
+      lastPoint = null;
+    }
+  }
 }
 
 function resolveBoardId() {
