@@ -26,15 +26,11 @@ export class InputController {
     this.pinchAnchor = null;
     this.erasedThisGesture = new Set();
 
-    // Deliberate non-Pencil input. It is only active when the user explicitly
-    // enables the toolbar toggle, so the default one-finger pan path is intact.
     this.softPointerId = null;
     this.softPointerType = null;
     this.softMode = null;
     this.softLastPoint = null;
 
-    // A finger that starts on an image temporarily belongs to object editing.
-    // A second finger promotes the gesture back to ordinary pinch/pan.
     this.selectionTouchPointerId = null;
     this.selectionTouchPoint = null;
 
@@ -89,12 +85,8 @@ export class InputController {
   shouldSelect(event) {
     if (!this.selection) return false;
     if (event.pointerType === "mouse" && event.button === 2) return true;
-
-    // Image editing on tablets is finger-owned. If an image is selected, Pencil
-    // remains free to write even when the Select button happens to be active.
     if (event.pointerType === "pen" && this.selection.selectedImage?.()) return false;
     if (this.selection.isCropping?.()) return event.pointerType !== "pen";
-
     return event.pointerType !== "touch"
       && (this.tool === "select" || event.ctrlKey || event.metaKey);
   }
@@ -149,7 +141,7 @@ export class InputController {
       const selectedImage = this.selection?.selectedImage?.() || null;
       if (this.selection?.isCropping?.()) {
         if (selectedImage && pointInsideImage(this.renderer, selectedImage, event.clientX, event.clientY)) {
-          this.beginImageTouch(event, selectedImage);
+          this.beginCropTouch(event);
           return;
         }
         this.selection.cancelCrop();
@@ -209,9 +201,7 @@ export class InputController {
 
     if (this.pencil.ownsPointer(event.pointerId)) {
       preventDefault(event);
-      if (this.softPointerId === event.pointerId) {
-        this.softLastPoint = { x: event.clientX, y: event.clientY };
-      }
+      if (this.softPointerId === event.pointerId) this.softLastPoint = { x: event.clientX, y: event.clientY };
       this.pencil.move(event);
       return;
     }
@@ -332,6 +322,19 @@ export class InputController {
     this.selection.preparePointer(event, world);
     this.selection.mode = this.selection.hitResizeHandle(event) ? "resize" : "pending-move";
     this.selection.captureOriginals();
+    this.trackSelectionTouch(event);
+  }
+
+  beginCropTouch(event) {
+    this.cancelStylusFallback();
+    this.cancelTouchGesture();
+    this.endMouseInteraction();
+    this.finishSoftInput({ endInk: true });
+    this.selection.pointerDown(event);
+    if (this.selection.ownsPointer(event.pointerId)) this.trackSelectionTouch(event);
+  }
+
+  trackSelectionTouch(event) {
     this.selectionTouchPointerId = event.pointerId;
     this.selectionTouchPoint = { x: event.clientX, y: event.clientY };
   }
