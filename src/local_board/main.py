@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import uuid
 from pathlib import Path
 
@@ -7,6 +8,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from .ai_formula import DEFAULT_FORMULA_MODEL, FormulaRecognitionError, recognize_formula, validate_formula_image_data_url
 from .config import SETTINGS, WEB_DIR
 from .protocol import ProtocolError, normalize_client_event, normalize_participant_profile
 from .room import RoomManager
@@ -14,10 +16,11 @@ from .room_service import RoomService
 from .storage import ASSET_EXTENSIONS, JsonBoardStore, validate_board_id
 
 MAX_IMAGE_BYTES = 12 * 1024 * 1024
+MAX_AI_REQUEST_BYTES = 6_200_000
 
 
 def create_app(data_dir: Path | None = None) -> FastAPI:
-    app = FastAPI(title="Local Board", version="0.5.0")
+    app = FastAPI(title="Local Board", version="0.6.0")
     store = JsonBoardStore(data_dir or SETTINGS.data_dir)
     rooms = RoomManager(store)
     room_service = RoomService(store)
@@ -72,6 +75,32 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             "src": f"/api/boards/{board_id}/assets/{asset_name}",
             "name": asset_name,
         }
+
+    @app.post("/api/boards/{board_id}/ai/formula")
+    async def recognize_board_formula(board_id: str, request: Request) -> dict:
+        _require_existing_board(store, board_id)
+        raw_length = request.headers.get("content-length")
+        if raw_length and raw_length.isdigit() and int(raw_length) > MAX_AI_REQUEST_BYTES:
+            raise HTTPException(status_code=413, detail="formula capture is too large")
+        try:
+            payload = await request.json()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="invalid JSON") from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="invalid request")
+        try:
+            image = validate_formula_image_data_url(payload.get("image"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+        if not api_key:
+            raise HTTPException(status_code=503, detail="OPENROUTER_API_KEY is not configured")
+        model = os.getenv("OPENROUTER_FORMULA_MODEL", DEFAULT_FORMULA_MODEL).strip() or DEFAULT_FORMULA_MODEL
+        try:
+            return await recognize_formula(image, api_key=api_key, model=model)
+        except FormulaRecognitionError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @app.get("/api/boards/{board_id}/assets/{asset_name}")
     async def board_asset(board_id: str, asset_name: str) -> FileResponse:
