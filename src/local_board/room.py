@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import WebSocket
 
 from .models import BoardObject, Stroke
-from .protocol import MAX_POINTS_PER_STROKE, ProtocolError
+from .protocol import MAX_POINTS_PER_STROKE, ProtocolError, normalize_background
 from .storage import JsonBoardStore
 
 
@@ -18,6 +18,7 @@ class BoardRoom:
         self.board_id = board_id
         self.store = store
         self.revision = int(document.get("revision", 0))
+        self.background = normalize_background(document.get("background"))
 
         self.strokes: dict[str, Stroke] = {}
         self.order: list[str] = []
@@ -34,6 +35,7 @@ class BoardRoom:
             self.object_order.append(board_object.id)
 
         self.clients: dict[str, WebSocket] = {}
+        self.client_profiles: dict[str, dict[str, str]] = {}
         self._state_lock = asyncio.Lock()
         self._persist_lock = asyncio.Lock()
         self._recent_op_order: deque[str] = deque(maxlen=10_000)
@@ -44,6 +46,7 @@ class BoardRoom:
             "version": 1,
             "board_id": self.board_id,
             "revision": self.revision,
+            "background": dict(self.background),
             "strokes": [
                 self.strokes[stroke_id].to_dict()
                 for stroke_id in self.order
@@ -56,13 +59,28 @@ class BoardRoom:
             ],
         }
 
-    async def connect(self, client_id: str, websocket: WebSocket) -> None:
+    def presence_payload(self) -> dict[str, Any]:
+        roster = []
+        for client_id in self.clients:
+            profile = self.client_profiles.get(client_id) or {
+                "name": "Участник",
+                "role": "student",
+                "device": "Устройство",
+            }
+            roster.append({"client_id": client_id, **profile})
+        roster.sort(key=lambda item: (0 if item["role"] == "teacher" else 1, item["name"].lower(), item["device"].lower()))
+        return {"type": "presence", "participants": len(roster), "roster": roster}
+
+    async def connect(self, client_id: str, websocket: WebSocket, profile: dict[str, str]) -> None:
         self.clients[client_id] = websocket
+        self.client_profiles[client_id] = dict(profile)
+        presence = self.presence_payload()
         await websocket.send_json(
             {
                 "type": "snapshot",
                 "board": self.snapshot_document(),
-                "participants": len(self.clients),
+                "participants": presence["participants"],
+                "roster": presence["roster"],
             }
         )
         await self.broadcast_presence()
@@ -72,11 +90,12 @@ class BoardRoom:
         if current is not websocket:
             return
         self.clients.pop(client_id, None)
+        self.client_profiles.pop(client_id, None)
         await self.persist()
         await self.broadcast_presence()
 
     async def broadcast_presence(self) -> None:
-        await self._broadcast({"type": "presence", "participants": len(self.clients)}, exclude=None)
+        await self._broadcast(self.presence_payload(), exclude=None)
 
     async def handle_event(self, client_id: str, event: dict[str, Any]) -> None:
         if event["type"] == "ping":
@@ -112,6 +131,7 @@ class BoardRoom:
             "object.update",
             "object.reorder",
             "object.delete",
+            "board.background",
             "board.clear",
         }:
             await self.persist()
@@ -231,6 +251,10 @@ class BoardRoom:
             self.object_order = [item for item in self.object_order if item != object_id]
             return
 
+        if event_type == "board.background":
+            self.background = dict(event["background"])
+            return
+
         if event_type == "board.clear":
             self.strokes.clear()
             self.order.clear()
@@ -263,6 +287,7 @@ class BoardRoom:
                 stale.append(client_id)
         for client_id in stale:
             self.clients.pop(client_id, None)
+            self.client_profiles.pop(client_id, None)
 
     async def persist(self) -> None:
         async with self._persist_lock:
