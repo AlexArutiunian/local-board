@@ -103,7 +103,8 @@ async def recognize_formula(
     candidates = formula_model_candidates(model)
     started = time.perf_counter()
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + TOTAL_OCR_TIMEOUT_SECONDS
+    start_loop_time = loop.time()
+    deadline = start_loop_time + TOTAL_OCR_TIMEOUT_SECONDS
     failures: list[str] = []
     saw_no_formula = False
     launched_models: list[str] = []
@@ -131,8 +132,7 @@ async def recognize_formula(
 
     try:
         while active or next_index < len(candidates):
-            now = loop.time()
-            if now >= deadline:
+            if loop.time() >= deadline:
                 break
 
             # If every launched route failed quickly, do not wait for its normal
@@ -144,7 +144,7 @@ async def recognize_formula(
             next_hedge_at = None
             if next_index < len(candidates):
                 hedge_slot = min(next_index - 1, len(HEDGE_DELAYS_SECONDS) - 1)
-                next_hedge_at = deadline - TOTAL_OCR_TIMEOUT_SECONDS + HEDGE_DELAYS_SECONDS[hedge_slot]
+                next_hedge_at = start_loop_time + HEDGE_DELAYS_SECONDS[hedge_slot]
 
             wake_at = deadline if next_hedge_at is None else min(deadline, next_hedge_at)
             timeout = max(0.0, wake_at - loop.time())
@@ -308,7 +308,6 @@ def _get_http_client() -> httpx.AsyncClient:
         _http_client = httpx.AsyncClient(
             timeout=httpx.Timeout(8.0, connect=2.0),
             limits=httpx.Limits(max_keepalive_connections=6, max_connections=12),
-            http2=True,
         )
     return _http_client
 
