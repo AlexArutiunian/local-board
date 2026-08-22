@@ -1,6 +1,7 @@
 import { FormulaTransformController } from "./formula-transform.js";
 import { InputController } from "./input-controller.js";
 import { installAreaSelection } from "./selection-area.js";
+import { installSelectionDragIntent } from "./selection-drag-intent.js";
 import { installSelectionProductivity } from "./selection-productivity.js";
 
 // Keep Select semantics modular and attach them to the concrete InputController
@@ -22,6 +23,15 @@ if (!InputController.prototype.__selectionProductivityBootstrap) {
       sendEvent: this.sendEvent,
       history,
       showToast: showBoardToast,
+    });
+
+    // Click selects one item, but a real drag must become a marquee even when
+    // the pointer started directly on handwriting. This prevents the first ink
+    // stroke under the pointer from stealing an intended formula-area drag.
+    installSelectionDragIntent({
+      selection: this.selection,
+      state: this.state,
+      renderer: this.renderer,
     });
 
     // Marquee is an area selection, not merely a visual rectangle. Recompute
