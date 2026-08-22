@@ -15,6 +15,7 @@ export class CanvasRenderer {
     this.baseCanvas = document.createElement("canvas");
     this.baseCtx = this.baseCanvas.getContext("2d");
     this.baseDirty = true;
+    this.cachedBaseGeneration = -1;
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(canvas.parentElement);
@@ -68,6 +69,12 @@ export class CanvasRenderer {
   }
 
   render() {
+    // BoardState increments baseGeneration only when completed/static ink changes.
+    // This catches local eraser/undo/clear and remote structural events without
+    // forcing every caller to remember to invalidate the cache manually.
+    if (this.cachedBaseGeneration !== this.state.baseGeneration) {
+      this.baseDirty = true;
+    }
     if (this.baseDirty) this.rebuildBase();
 
     // Copy the cached background/completed ink in device pixels. Then draw only
@@ -98,6 +105,7 @@ export class CanvasRenderer {
       if (stroke.complete) this.drawStrokeTo(ctx, stroke);
     }
     this.baseDirty = false;
+    this.cachedBaseGeneration = this.state.baseGeneration;
   }
 
   drawGridTo(ctx, width, height) {
