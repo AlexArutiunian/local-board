@@ -1,8 +1,11 @@
+import asyncio
 import os
+import time
 
 import pytest
 from fastapi.testclient import TestClient
 
+import local_board.ai_formula as ai_formula
 from local_board.ai_formula import (
     DEFAULT_FORMULA_MODEL,
     FormulaNotFoundError,
@@ -50,6 +53,42 @@ def test_no_formula_sentinel_is_detected():
     assert is_no_formula_response("__NO_FORMULA__")
     assert is_no_formula_response("no formula found")
     assert not is_no_formula_response(r"x^2+1=0")
+
+
+def test_hedged_formula_ocr_uses_fast_second_free_route(monkeypatch):
+    calls = []
+    second = "dots-studio/dots-3-note-preview:free"
+
+    async def fake_recognize(image_data_url, *, api_key, model):
+        calls.append(model)
+        if model == DEFAULT_FORMULA_MODEL:
+            await asyncio.sleep(0.12)
+            return {"latex": "slow", "model": model, "usage": None}
+        if model == second:
+            await asyncio.sleep(0.005)
+            return {"latex": "x^2+1", "model": model, "usage": None}
+        await asyncio.sleep(0.05)
+        raise FormulaProviderUnavailableError("unused fallback")
+
+    monkeypatch.setattr(ai_formula, "_recognize_with_model", fake_recognize)
+    monkeypatch.setattr(ai_formula, "HEDGE_DELAYS_SECONDS", (0.01, 0.04))
+    monkeypatch.setattr(ai_formula, "TOTAL_OCR_TIMEOUT_SECONDS", 0.20)
+
+    started = time.perf_counter()
+    result = asyncio.run(
+        ai_formula.recognize_formula(
+            "data:image/png;base64,iVBORw0KGgo=",
+            api_key="test-key",
+        )
+    )
+    elapsed = time.perf_counter() - started
+
+    assert result["latex"] == "x^2+1"
+    assert result["model"] == second
+    assert DEFAULT_FORMULA_MODEL in calls
+    assert second in calls
+    assert elapsed < 0.08, "second route should win without waiting for slow primary"
+    assert result["elapsed_ms"] < 80
 
 
 def test_formula_endpoint_requires_server_side_key(tmp_path, monkeypatch):
