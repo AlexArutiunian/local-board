@@ -1,3 +1,4 @@
+import { createId } from "./id.js";
 import { PencilEngine } from "./pencil-engine.js";
 
 export class InputController {
@@ -300,7 +301,7 @@ export class InputController {
     this.erasedThisGesture.add(hit.id);
     const mutation = {
       type: "stroke.delete",
-      op_id: createOperationId(),
+      op_id: createId(),
       stroke_id: hit.id,
     };
     this.state.applyEvent(mutation, null, this.clientId);
@@ -313,16 +314,6 @@ export class InputController {
       window.getSelection?.()?.removeAllRanges();
     } catch (_) {}
   }
-}
-
-function createOperationId() {
-  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
-  const bytes = new Uint8Array(16);
-  globalThis.crypto?.getRandomValues?.(bytes);
-  if (!bytes.some(Boolean)) {
-    return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  }
-  return [...bytes].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
 function preventDefault(event) {
