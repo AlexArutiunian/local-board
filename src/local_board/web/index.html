@@ -35,38 +35,72 @@
       <canvas id="board" aria-label="Совместная доска"></canvas>
 
       <div class="toolbar" role="toolbar" aria-label="Инструменты доски">
+        <div class="tool-section primary-tools">
+          <button class="tool icon-button active" data-tool="pen" title="Ручка" aria-label="Ручка">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l4.3-1 10.8-10.8a2.15 2.15 0 0 0 0-3L18.8 4.9a2.15 2.15 0 0 0-3 0L5 15.7 4 20Z"/><path d="m14.8 5.9 3.3 3.3"/></svg>
+          </button>
+          <button class="tool icon-button" data-tool="eraser" title="Ластик" aria-label="Ластик">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7.2 18.5-3.1-3.1a2 2 0 0 1 0-2.8l7.7-7.7a2 2 0 0 1 2.8 0l5.3 5.3a2 2 0 0 1 0 2.8l-5.5 5.5H7.2Z"/><path d="m9.2 7.5 7.3 7.3"/><path d="M7.2 18.5H20"/></svg>
+          </button>
+          <button class="tool icon-button" data-tool="pan" title="Перемещение" aria-label="Перемещение">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.5 11V7.7a1.5 1.5 0 0 1 3 0V10"/><path d="M10.5 10V5.8a1.5 1.5 0 0 1 3 0V10"/><path d="M13.5 10V6.8a1.5 1.5 0 0 1 3 0v4.1"/><path d="M16.5 10.9V9.2a1.5 1.5 0 0 1 3 0v4.2c0 4.2-2.5 7.1-6.6 7.1h-1.1c-2.1 0-3.6-.8-4.8-2.4L4.4 14.6a1.6 1.6 0 0 1 2.4-2.1l1.4 1.3"/></svg>
+          </button>
+        </div>
+
+        <div class="divider"></div>
+
         <div class="tool-section">
-          <button class="tool active" data-tool="pen" title="Ручка" aria-label="Ручка">✎</button>
-          <button class="tool" data-tool="eraser" title="Ластик" aria-label="Ластик">⌫</button>
-          <button class="tool" data-tool="pan" title="Перемещение" aria-label="Перемещение">✋</button>
+          <button id="colorTrigger" class="color-trigger" type="button" title="Выбрать цвет" aria-label="Цвет линии: чёрный" aria-expanded="false">
+            <span id="currentColorSwatch" class="current-color-swatch" style="--c:#111111"></span>
+            <svg class="chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
+          </button>
+
+          <label class="width-control" title="Толщина линии">
+            <span class="width-preview" aria-hidden="true"></span>
+            <input id="width" type="range" min="1" max="18" step="1" value="4" aria-label="Толщина линии" />
+            <span id="widthLabel">4</span>
+          </label>
         </div>
 
         <div class="divider"></div>
 
-        <div class="tool-section colors">
-          <button class="color active" data-color="#111111" style="--c:#111111" aria-label="Чёрный"></button>
-          <button class="color" data-color="#2563eb" style="--c:#2563eb" aria-label="Синий"></button>
-          <button class="color" data-color="#dc2626" style="--c:#dc2626" aria-label="Красный"></button>
-          <button class="color" data-color="#16a34a" style="--c:#16a34a" aria-label="Зелёный"></button>
+        <div class="tool-section history-tools">
+          <button id="undo" class="icon-button" title="Отменить" aria-label="Отменить">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 8-4 4 4 4"/><path d="M5 12h7.5a5.5 5.5 0 0 1 5.5 5.5"/></svg>
+          </button>
+          <button id="redo" class="icon-button" title="Вернуть" aria-label="Вернуть">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 8 4 4-4 4"/><path d="M19 12h-7.5A5.5 5.5 0 0 0 6 17.5"/></svg>
+          </button>
+          <button id="goToLast" class="icon-button" title="К последнему месту письма" aria-label="К последнему месту письма" disabled>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="1.6"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+          </button>
+          <button id="resetView" class="zoom-reset" title="Сбросить масштаб и положение">100%</button>
         </div>
 
         <div class="divider"></div>
 
-        <label class="width-control" title="Толщина линии">
-          <input id="width" type="range" min="1" max="18" step="1" value="4" />
-          <span id="widthLabel">4</span>
+        <div class="tool-section utility-tools">
+          <button id="exportPng" class="utility-button" title="Сохранить PNG">PNG</button>
+          <button id="clearBoard" class="utility-button danger" title="Очистить доску">Очистить</button>
+        </div>
+      </div>
+
+      <div id="colorPopover" class="board-popover color-popover hidden" role="dialog" aria-label="Выбор цвета">
+        <div class="popover-title">Цвет линии</div>
+        <div class="color-grid" role="group" aria-label="Готовые цвета">
+          <button class="color-option active" data-color="#111111" style="--c:#111111" aria-label="Чёрный"></button>
+          <button class="color-option" data-color="#2563eb" style="--c:#2563eb" aria-label="Синий"></button>
+          <button class="color-option" data-color="#dc2626" style="--c:#dc2626" aria-label="Красный"></button>
+          <button class="color-option" data-color="#16a34a" style="--c:#16a34a" aria-label="Зелёный"></button>
+          <button class="color-option" data-color="#9333ea" style="--c:#9333ea" aria-label="Фиолетовый"></button>
+          <button class="color-option" data-color="#ea580c" style="--c:#ea580c" aria-label="Оранжевый"></button>
+          <button class="color-option" data-color="#0891b2" style="--c:#0891b2" aria-label="Бирюзовый"></button>
+          <button class="color-option" data-color="#57534e" style="--c:#57534e" aria-label="Серый"></button>
+        </div>
+        <label class="custom-color-row">
+          <span>Свой цвет</span>
+          <input id="customColor" type="color" value="#111111" aria-label="Выбрать произвольный цвет" />
         </label>
-
-        <div class="divider"></div>
-
-        <div class="tool-section">
-          <button id="undo" title="Отменить" aria-label="Отменить">↶</button>
-          <button id="redo" title="Вернуть" aria-label="Вернуть">↷</button>
-          <button id="goToLast" title="Перейти к последнему месту письма" aria-label="К последнему месту письма" disabled>⌖</button>
-          <button id="resetView" title="Сбросить вид">100%</button>
-          <button id="exportPng" title="Сохранить PNG">PNG</button>
-          <button id="clearBoard" class="danger" title="Очистить доску">Очистить</button>
-        </div>
       </div>
 
       <div id="offlineBanner" class="offline-banner hidden">
