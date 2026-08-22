@@ -33,6 +33,11 @@ export class InputController {
     this.softMode = null;
     this.softLastPoint = null;
 
+    // A finger that starts on an image temporarily belongs to object editing.
+    // A second finger promotes the gesture back to ordinary pinch/pan.
+    this.selectionTouchPointerId = null;
+    this.selectionTouchPoint = null;
+
     this.pendingStylusTouch = null;
     this.stylusFallbackTimer = null;
     this.bind();
@@ -83,8 +88,13 @@ export class InputController {
 
   shouldSelect(event) {
     if (!this.selection) return false;
-    if (this.selection.isCropping?.()) return true;
     if (event.pointerType === "mouse" && event.button === 2) return true;
+
+    // Image editing on tablets is finger-owned. If an image is selected, Pencil
+    // remains free to write even when the Select button happens to be active.
+    if (event.pointerType === "pen" && this.selection.selectedImage?.()) return false;
+    if (this.selection.isCropping?.()) return event.pointerType !== "pen";
+
     return event.pointerType !== "touch"
       && (this.tool === "select" || event.ctrlKey || event.metaKey);
   }
@@ -112,11 +122,13 @@ export class InputController {
       this.finishSoftInput({ endInk: true });
       this.finishNonInkStylus();
 
-      if (this.tool === "pen") {
+      const effectiveTool = this.effectiveStylusTool();
+      if (effectiveTool === "pen") {
+        if (this.selection?.isCropping?.()) this.selection.cancelCrop();
         this.pencil.begin(event, { color: this.color, width: this.width, pointerType: "pen" });
-      } else if (this.tool === "eraser" || this.tool === "pan") {
+      } else if (effectiveTool === "eraser" || effectiveTool === "pan") {
         this.pencil.interrupt();
-        this.startNonInkStylus(event.pointerId, this.tool, event.clientX, event.clientY);
+        this.startNonInkStylus(event.pointerId, effectiveTool, event.clientX, event.clientY);
       }
       return;
     }
@@ -124,9 +136,31 @@ export class InputController {
     if (event.pointerType === "touch") {
       if (this.isRealStylusActive()) return;
 
+      if (this.selectionTouchPointerId !== null) {
+        this.promoteSelectionTouchToNavigation(event);
+        return;
+      }
+
       if (this.softPointerType === "touch" && this.softPointerId !== null) {
         this.promoteSoftTouchToNavigation(event);
         return;
+      }
+
+      const selectedImage = this.selection?.selectedImage?.() || null;
+      if (this.selection?.isCropping?.()) {
+        if (selectedImage && pointInsideImage(this.renderer, selectedImage, event.clientX, event.clientY)) {
+          this.beginImageTouch(event, selectedImage);
+          return;
+        }
+        this.selection.cancelCrop();
+        this.selection.clear();
+      } else {
+        const image = findImageAt(this.state, this.renderer, event.clientX, event.clientY);
+        if (image) {
+          this.beginImageTouch(event, image);
+          return;
+        }
+        if (this.selection?.hasSelection?.()) this.selection.clear();
       }
 
       if (this.directInkEnabled && this.tool === "pen" && this.touchPointers.size === 0) {
@@ -166,6 +200,9 @@ export class InputController {
   onPointerMove(event) {
     if (this.selection?.ownsPointer(event.pointerId)) {
       preventDefault(event);
+      if (this.selectionTouchPointerId === event.pointerId) {
+        this.selectionTouchPoint = { x: event.clientX, y: event.clientY };
+      }
       this.selection.pointerMove(event);
       return;
     }
@@ -194,13 +231,15 @@ export class InputController {
       this.finishSoftInput({ endInk: true });
       this.finishNonInkStylus();
 
-      if (this.tool === "select" && this.selection) {
+      const effectiveTool = this.effectiveStylusTool();
+      if (effectiveTool === "select" && this.selection) {
         this.selection.pointerDown(event);
-      } else if (this.tool === "pen") {
+      } else if (effectiveTool === "pen") {
+        if (this.selection?.isCropping?.()) this.selection.cancelCrop();
         this.pencil.recover(event, { color: this.color, width: this.width });
-      } else if (this.tool === "eraser" || this.tool === "pan") {
+      } else if (effectiveTool === "eraser" || effectiveTool === "pan") {
         this.pencil.interrupt();
-        this.startNonInkStylus(event.pointerId, this.tool, event.clientX, event.clientY);
+        this.startNonInkStylus(event.pointerId, effectiveTool, event.clientX, event.clientY);
       }
       return;
     }
@@ -235,6 +274,7 @@ export class InputController {
     if (this.selection?.ownsPointer(event.pointerId)) {
       preventDefault(event);
       this.selection.pointerUp(event);
+      if (this.selectionTouchPointerId === event.pointerId) this.clearSelectionTouchTracking();
       return;
     }
 
@@ -273,6 +313,43 @@ export class InputController {
       this.endMouseInteraction();
       if (shouldSaveView) this.renderer.saveView();
     }
+  }
+
+  effectiveStylusTool() {
+    if (this.tool === "select" && this.selection?.selectedImage?.()) return "pen";
+    return this.tool;
+  }
+
+  beginImageTouch(event, image) {
+    this.cancelStylusFallback();
+    this.cancelTouchGesture();
+    this.endMouseInteraction();
+    this.finishSoftInput({ endInk: true });
+
+    const key = `object:${image.id}`;
+    this.selection.selectOnly(key);
+    const world = this.renderer.screenToWorld(event.clientX, event.clientY);
+    this.selection.preparePointer(event, world);
+    this.selection.mode = this.selection.hitResizeHandle(event) ? "resize" : "pending-move";
+    this.selection.captureOriginals();
+    this.selectionTouchPointerId = event.pointerId;
+    this.selectionTouchPoint = { x: event.clientX, y: event.clientY };
+  }
+
+  promoteSelectionTouchToNavigation(secondEvent) {
+    if (this.selectionTouchPointerId === null) return;
+    const firstId = this.selectionTouchPointerId;
+    const first = this.selectionTouchPoint || { x: secondEvent.clientX, y: secondEvent.clientY };
+    this.selection?.cancelPointer();
+    this.clearSelectionTouchTracking();
+    this.touchPointers.set(firstId, { ...first });
+    this.touchPointers.set(secondEvent.pointerId, { x: secondEvent.clientX, y: secondEvent.clientY });
+    this.startTouchGesture();
+  }
+
+  clearSelectionTouchTracking() {
+    this.selectionTouchPointerId = null;
+    this.selectionTouchPoint = null;
   }
 
   startSoftInk(event, pointerType) {
@@ -394,13 +471,15 @@ export class InputController {
     this.endMouseInteraction();
     this.finishSoftInput({ endInk: true });
     const adapted = touchToPointerLike(touchSnapshot);
+    const effectiveTool = this.effectiveStylusTool();
 
-    if (this.tool === "select" && this.selection) {
+    if (effectiveTool === "select" && this.selection) {
       this.selection.pointerDown(adapted);
-    } else if (this.tool === "pen") {
+    } else if (effectiveTool === "pen") {
+      if (this.selection?.isCropping?.()) this.selection.cancelCrop();
       this.pencil.recover(adapted, { color: this.color, width: this.width });
-    } else if (this.tool === "eraser" || this.tool === "pan") {
-      this.startNonInkStylus(adapted.pointerId, this.tool, adapted.clientX, adapted.clientY);
+    } else if (effectiveTool === "eraser" || effectiveTool === "pan") {
+      this.startNonInkStylus(adapted.pointerId, effectiveTool, adapted.clientX, adapted.clientY);
     }
   }
 
@@ -502,6 +581,7 @@ export class InputController {
     this.finishSoftInput({ endInk: true });
     this.pencil.interrupt();
     this.selection?.cancelPointer();
+    this.clearSelectionTouchTracking();
     this.finishNonInkStylus();
     this.touchPointers.clear();
     this.mousePointerId = null;
@@ -570,6 +650,29 @@ function touchToPointerLike(touch) {
 }
 
 function touchKey(identifier) { return `stylus-touch:${identifier}`; }
+
+function findImageAt(state, renderer, clientX, clientY) {
+  const point = renderer.screenToWorld(clientX, clientY);
+  const tolerance = 4 / Math.max(0.2, renderer.view.zoom);
+  const objects = state.listObjects();
+  for (let index = objects.length - 1; index >= 0; index -= 1) {
+    const object = objects[index];
+    if (object.kind !== "image") continue;
+    if (point.x >= object.x - tolerance
+      && point.x <= object.x + object.width + tolerance
+      && point.y >= object.y - tolerance
+      && point.y <= object.y + object.height + tolerance) return object;
+  }
+  return null;
+}
+
+function pointInsideImage(renderer, object, clientX, clientY) {
+  const point = renderer.screenToWorld(clientX, clientY);
+  return point.x >= object.x
+    && point.x <= object.x + object.width
+    && point.y >= object.y
+    && point.y <= object.y + object.height;
+}
 
 function findClosestStroke(strokes, point, radius, ignored) {
   let best = null;
