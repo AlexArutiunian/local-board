@@ -77,15 +77,31 @@ async function createRoom() {
   }
 }
 
-function openRoom(event) {
+async function openRoom(event) {
   event.preventDefault();
   const roomId = roomInput.value.trim();
   if (!/^\d{4}$/.test(roomId)) {
     showJoinError("Код комнаты — ровно 4 цифры.");
     return;
   }
+
   hideJoinError();
-  location.assign(`/b/${roomId}`);
+  const submit = joinForm.querySelector('button[type="submit"]');
+  submit.disabled = true;
+  try {
+    const response = await fetch(`/api/boards/${roomId}`, { cache: "no-store" });
+    if (response.status === 404) {
+      showJoinError("Такой доски нет.");
+      return;
+    }
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    location.assign(`/b/${roomId}`);
+  } catch (error) {
+    console.error("Room lookup failed:", error);
+    showJoinError("Не удалось проверить комнату.");
+  } finally {
+    submit.disabled = false;
+  }
 }
 
 function formatUpdatedAt(value) {
