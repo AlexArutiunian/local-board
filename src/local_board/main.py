@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -11,7 +11,9 @@ from .config import SETTINGS, WEB_DIR
 from .protocol import ProtocolError, normalize_client_event
 from .room import RoomManager
 from .room_service import RoomService
-from .storage import JsonBoardStore, validate_board_id
+from .storage import ASSET_EXTENSIONS, JsonBoardStore, validate_board_id
+
+MAX_IMAGE_BYTES = 12 * 1024 * 1024
 
 
 def create_app(data_dir: Path | None = None) -> FastAPI:
@@ -52,6 +54,35 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         _require_existing_board(store, board_id)
         room = await rooms.get(board_id)
         return room.snapshot_document()
+
+    @app.post("/api/boards/{board_id}/assets", status_code=201)
+    async def upload_board_asset(board_id: str, request: Request) -> dict[str, str]:
+        _require_existing_board(store, board_id)
+        content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
+        if content_type not in ASSET_EXTENSIONS:
+            raise HTTPException(status_code=415, detail="unsupported image type")
+        raw_length = request.headers.get("content-length")
+        if raw_length and raw_length.isdigit() and int(raw_length) > MAX_IMAGE_BYTES:
+            raise HTTPException(status_code=413, detail="image is too large")
+        data = await request.body()
+        if not data or len(data) > MAX_IMAGE_BYTES:
+            raise HTTPException(status_code=413, detail="image is too large")
+        asset_name = store.save_asset(board_id, content_type, data)
+        return {
+            "src": f"/api/boards/{board_id}/assets/{asset_name}",
+            "name": asset_name,
+        }
+
+    @app.get("/api/boards/{board_id}/assets/{asset_name}")
+    async def board_asset(board_id: str, asset_name: str) -> FileResponse:
+        _require_existing_board(store, board_id)
+        try:
+            path = store.asset_path(board_id, asset_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="asset not found") from exc
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="asset not found")
+        return FileResponse(path, headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
     @app.websocket("/ws/{board_id}")
     async def board_socket(websocket: WebSocket, board_id: str) -> None:
