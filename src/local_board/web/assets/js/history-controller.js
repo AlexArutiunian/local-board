@@ -1,12 +1,15 @@
 import { cloneBoardObject, cloneStroke } from "./board-state.js";
 import { createId } from "./id.js";
 
+const MAX_HISTORY_ACTIONS = 500;
+
 export class LocalHistoryController {
   constructor({ state, onChange = null }) {
     this.state = state;
     this.onChange = onChange;
     this.undoStack = [];
     this.redoStack = [];
+    this.pendingGroup = null;
   }
 
   canUndo() { return this.undoStack.length > 0; }
@@ -15,13 +18,39 @@ export class LocalHistoryController {
   clear() {
     this.undoStack.length = 0;
     this.redoStack.length = 0;
+    this.pendingGroup = null;
+    this.notify();
+  }
+
+  beginGroup(label = "") {
+    if (this.pendingGroup) return false;
+    this.pendingGroup = { label: String(label || ""), actions: [] };
+    return true;
+  }
+
+  endGroup() {
+    const group = this.pendingGroup;
+    this.pendingGroup = null;
+    if (!group?.actions?.length) {
+      this.notify();
+      return false;
+    }
+    const action = group.actions.length === 1
+      ? group.actions[0]
+      : { kind: "group", label: group.label, actions: group.actions };
+    this.pushAction(action);
+    return true;
+  }
+
+  cancelGroup() {
+    this.pendingGroup = null;
     this.notify();
   }
 
   recordCreatedStroke(strokeId) {
     const stroke = this.state.getStroke(strokeId);
     if (!stroke) return false;
-    this.pushAction({ kind: "stroke.create", stroke: cloneStroke(stroke) });
+    this.recordAction({ kind: "stroke.create", stroke: cloneStroke(stroke) });
     return true;
   }
 
@@ -31,21 +60,21 @@ export class LocalHistoryController {
     if (event.type === "stroke.delete") {
       const deleted = this.state.getDeletedStroke(event.stroke_id);
       if (!deleted) return false;
-      this.pushAction({ kind: "stroke.delete", stroke: cloneStroke(deleted) });
+      this.recordAction({ kind: "stroke.delete", stroke: cloneStroke(deleted) });
       return true;
     }
 
     if (event.type === "object.create") {
       const object = this.state.getObject(event.object?.id);
       if (!object) return false;
-      this.pushAction({ kind: "object.create", object: cloneBoardObject(object) });
+      this.recordAction({ kind: "object.create", object: cloneBoardObject(object) });
       return true;
     }
 
     if (event.type === "object.delete") {
       const deleted = this.state.getDeletedObject(event.object_id);
       if (!deleted) return false;
-      this.pushAction({ kind: "object.delete", object: cloneBoardObject(deleted) });
+      this.recordAction({ kind: "object.delete", object: cloneBoardObject(deleted) });
       return true;
     }
 
@@ -55,11 +84,11 @@ export class LocalHistoryController {
   undo() {
     while (this.undoStack.length) {
       const action = this.undoStack.pop();
-      const event = this.inverseEvent(action);
-      if (!event) continue;
+      const events = this.inverseEvents(action);
+      if (!events.length) continue;
       this.redoStack.push(action);
       this.notify();
-      return event;
+      return events.length === 1 ? events[0] : events;
     }
     this.notify();
     return null;
@@ -68,20 +97,45 @@ export class LocalHistoryController {
   redo() {
     while (this.redoStack.length) {
       const action = this.redoStack.pop();
-      const event = this.forwardEvent(action);
-      if (!event) continue;
+      const events = this.forwardEvents(action);
+      if (!events.length) continue;
       this.undoStack.push(action);
       this.notify();
-      return event;
+      return events.length === 1 ? events[0] : events;
     }
     this.notify();
     return null;
   }
 
+  recordAction(action) {
+    if (this.pendingGroup) {
+      this.pendingGroup.actions.push(action);
+      return;
+    }
+    this.pushAction(action);
+  }
+
   pushAction(action) {
     this.undoStack.push(action);
+    if (this.undoStack.length > MAX_HISTORY_ACTIONS) this.undoStack.splice(0, this.undoStack.length - MAX_HISTORY_ACTIONS);
     this.redoStack.length = 0;
     this.notify();
+  }
+
+  inverseEvents(action) {
+    if (action?.kind === "group") {
+      return action.actions.slice().reverse().flatMap((child) => this.inverseEvents(child));
+    }
+    const event = this.inverseEvent(action);
+    return event ? [event] : [];
+  }
+
+  forwardEvents(action) {
+    if (action?.kind === "group") {
+      return action.actions.flatMap((child) => this.forwardEvents(child));
+    }
+    const event = this.forwardEvent(action);
+    return event ? [event] : [];
   }
 
   inverseEvent(action) {
