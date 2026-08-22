@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import SETTINGS, WEB_DIR
-from .protocol import ProtocolError, normalize_client_event
+from .protocol import ProtocolError, normalize_client_event, normalize_participant_profile
 from .room import RoomManager
 from .room_service import RoomService
 from .storage import ASSET_EXTENSIONS, JsonBoardStore, validate_board_id
@@ -17,7 +17,7 @@ MAX_IMAGE_BYTES = 12 * 1024 * 1024
 
 
 def create_app(data_dir: Path | None = None) -> FastAPI:
-    app = FastAPI(title="Local Board", version="0.4.0")
+    app = FastAPI(title="Local Board", version="0.5.0")
     store = JsonBoardStore(data_dir or SETTINGS.data_dir)
     rooms = RoomManager(store)
     room_service = RoomService(store)
@@ -99,10 +99,19 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         if len(client_id) > 128:
             await websocket.close(code=1008, reason="invalid client id")
             return
+        try:
+            profile = normalize_participant_profile(
+                websocket.query_params.get("name") or "Участник",
+                websocket.query_params.get("role") or "student",
+                websocket.query_params.get("device") or "Браузер",
+            )
+        except ProtocolError:
+            await websocket.close(code=1008, reason="invalid participant profile")
+            return
 
         room = await rooms.get(board_id)
         await websocket.accept()
-        await room.connect(client_id, websocket)
+        await room.connect(client_id, websocket, profile)
 
         try:
             while True:
