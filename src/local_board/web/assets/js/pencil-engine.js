@@ -22,6 +22,7 @@ export class PencilEngine {
     this.cancelFrame = cancelFrame;
 
     this.activePointerId = null;
+    this.activePointerType = null;
     this.currentStrokeId = null;
     this.pendingNetworkPoints = [];
     this.networkFlushHandle = null;
@@ -47,6 +48,7 @@ export class PencilEngine {
     if (!usable.length) return false;
 
     this.activePointerId = pointerId;
+    this.activePointerType = normalizePointerType(pointerType);
     this.currentStrokeId = createId();
     this.pendingNetworkPoints.length = 0;
 
@@ -55,7 +57,7 @@ export class PencilEngine {
       id: this.currentStrokeId,
       color,
       width,
-      pointer_type: normalizePointerType(pointerType),
+      pointer_type: this.activePointerType,
       source_zoom: this.renderer.view.zoom,
       points: [firstPoint],
     };
@@ -74,7 +76,7 @@ export class PencilEngine {
 
   move(event) {
     if (!this.ownsPointer(event.pointerId) || !this.currentStrokeId) return;
-    if (!isContactEvent(event)) {
+    if (this.activePointerType !== "touch" && !isContactEvent(event)) {
       this.end(event.pointerId);
       return;
     }
@@ -100,7 +102,6 @@ export class PencilEngine {
 
   end(pointerId) {
     if (!this.ownsPointer(pointerId)) return false;
-
     const strokeId = this.currentStrokeId;
     if (strokeId) {
       this.flushPendingStrokePoints();
@@ -111,7 +112,25 @@ export class PencilEngine {
       this.renderer.invalidateBase();
       this.renderer.requestRender();
     }
+    this.reset();
+    return true;
+  }
 
+  cancel(pointerId) {
+    if (!this.ownsPointer(pointerId)) return false;
+    const strokeId = this.currentStrokeId;
+    if (this.networkFlushHandle !== null) {
+      this.cancelFrame(this.networkFlushHandle);
+      this.networkFlushHandle = null;
+    }
+    this.pendingNetworkPoints.length = 0;
+    if (strokeId && this.state.hasStroke(strokeId)) {
+      const mutation = this.withOp({ type: "stroke.delete", stroke_id: strokeId });
+      this.state.applyEvent(mutation, null, this.clientId);
+      this.sendEvent(mutation, { recordHistory: false });
+      this.renderer.invalidateBase();
+      this.renderer.requestRender();
+    }
     this.reset();
     return true;
   }
@@ -130,11 +149,7 @@ export class PencilEngine {
     if (!this.currentStrokeId || !this.pendingNetworkPoints.length) return;
     while (this.pendingNetworkPoints.length) {
       const points = this.pendingNetworkPoints.splice(0, MAX_NETWORK_BATCH_POINTS);
-      this.sendEvent(this.withOp({
-        type: "stroke.append",
-        stroke_id: this.currentStrokeId,
-        points,
-      }));
+      this.sendEvent(this.withOp({ type: "stroke.append", stroke_id: this.currentStrokeId, points }));
     }
   }
 
@@ -145,6 +160,7 @@ export class PencilEngine {
     }
     this.pendingNetworkPoints.length = 0;
     this.activePointerId = null;
+    this.activePointerType = null;
     this.currentStrokeId = null;
   }
 
