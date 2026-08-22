@@ -43,6 +43,7 @@ const input = new InputController({
   sendEvent: sendLocalEvent,
   onStrokeFinished: (strokeId) => history.recordCreatedStroke(strokeId),
 });
+input.setDirectInkEnabled(loadDirectInkEnabled());
 
 new AssetController({
   boardId,
@@ -91,6 +92,7 @@ realtime.connect();
 updateUndoButtons();
 updateGoToLastButton();
 updateCameraButtons();
+updateDirectInkButton();
 updateZoomButton(renderer.view);
 updateSelectionUI([]);
 
@@ -121,6 +123,21 @@ function bindToolbar() {
     widthLabel.textContent = widthInput.value;
   });
 
+  document.getElementById("directInk").addEventListener("click", () => {
+    input.setDirectInkEnabled(!input.directInkEnabled);
+    saveDirectInkEnabled(input.directInkEnabled);
+    updateDirectInkButton();
+    showToast(input.directInkEnabled
+      ? "Рисование мышью и пальцем включено"
+      : "Палец и мышь снова двигают холст");
+  });
+
+  document.getElementById("cropSelection").addEventListener("click", () => {
+    activateTool("select");
+    if (!selection.startCrop()) showToast("Сначала выбери одну картинку");
+  });
+  document.getElementById("cropApply").addEventListener("click", () => selection.applyCrop());
+  document.getElementById("cropCancel").addEventListener("click", () => selection.cancelCrop());
   document.getElementById("deleteSelection").addEventListener("click", () => selection.deleteSelected());
   document.getElementById("undo").addEventListener("click", undoLocalAction);
   document.getElementById("redo").addEventListener("click", redoLocalAction);
@@ -148,6 +165,7 @@ function bindToolbar() {
 function activateTool(tool) {
   const button = document.querySelector(`[data-tool="${tool}"]`);
   if (!button) return;
+  if (selection.isCropping() && tool !== "select") selection.cancelCrop();
   document.querySelectorAll("[data-tool]").forEach((item) => item.classList.toggle("active", item === button));
   input.setTool(tool);
 }
@@ -261,16 +279,12 @@ function positionPopover(trigger, popover) {
   popover.style.bottom = `${bottom}px`;
 }
 
-function undoLocalAction() {
-  applyHistoryEvent(history.undo());
-}
-
-function redoLocalAction() {
-  applyHistoryEvent(history.redo());
-}
+function undoLocalAction() { applyHistoryEvent(history.undo()); }
+function redoLocalAction() { applyHistoryEvent(history.redo()); }
 
 function applyHistoryEvent(event) {
   if (!event) return;
+  if (selection.isCropping()) selection.cancelCrop();
   state.applyEvent(event, null, clientId);
   sendLocalEvent(event, { recordHistory: false });
   selection.setSelection(selection.keys());
@@ -324,15 +338,27 @@ function showToast(message, tone = "") {
   clearTimeout(toastTimer);
   toast.textContent = message;
   toast.className = `board-toast ${tone}`.trim();
-  if (tone !== "busy") {
-    toastTimer = setTimeout(() => toast.classList.add("hidden"), 1800);
-  }
+  if (tone !== "busy") toastTimer = setTimeout(() => toast.classList.add("hidden"), 1800);
 }
 
 function updateSelectionUI(keys) {
-  const button = document.getElementById("deleteSelection");
-  button.classList.toggle("hidden", !keys.length);
+  const cropping = selection.isCropping();
+  const deleteButton = document.getElementById("deleteSelection");
+  const cropButton = document.getElementById("cropSelection");
+  const cropApply = document.getElementById("cropApply");
+  const cropCancel = document.getElementById("cropCancel");
+  const canCrop = keys.length === 1 && isImageKey(keys[0]);
+  deleteButton.classList.toggle("hidden", !keys.length || cropping);
+  cropButton.classList.toggle("hidden", !canCrop || cropping);
+  cropApply.classList.toggle("hidden", !cropping);
+  cropCancel.classList.toggle("hidden", !cropping);
 }
+
+function isImageKey(key) {
+  if (typeof key !== "string" || !key.startsWith("object:")) return false;
+  return state.getObject(key.slice("object:".length))?.kind === "image";
+}
+
 function updateUndoButtons() {
   document.getElementById("undo").disabled = !history.canUndo();
   document.getElementById("redo").disabled = !history.canRedo();
@@ -349,6 +375,14 @@ function updateCameraButtons() {
   scale.classList.toggle("active", remoteFollow.autoScaleEnabled);
   follow.setAttribute("aria-pressed", String(remoteFollow.autoFollowEnabled));
   scale.setAttribute("aria-pressed", String(remoteFollow.autoScaleEnabled));
+}
+function updateDirectInkButton() {
+  const button = document.getElementById("directInk");
+  button.classList.toggle("active", input.directInkEnabled);
+  button.setAttribute("aria-pressed", String(input.directInkEnabled));
+  button.title = input.directInkEnabled
+    ? "Рисование мышью и пальцем включено"
+    : "Разрешить рисование мышью и пальцем";
 }
 function updatePresence(count) { document.getElementById("participants").textContent = count === 1 ? "1 участник" : `${count} участников`; }
 function updateConnection(status) {
@@ -422,6 +456,12 @@ function loadPenColor() {
   return "#111111";
 }
 function savePenColor(color) { try { localStorage.setItem("local-board:pen-color", color); } catch (_) {} }
+function loadDirectInkEnabled() {
+  try { return localStorage.getItem("local-board:direct-ink") === "1"; } catch (_) { return false; }
+}
+function saveDirectInkEnabled(enabled) {
+  try { localStorage.setItem("local-board:direct-ink", enabled ? "1" : "0"); } catch (_) {}
+}
 function isHexColor(value) { return typeof value === "string" && /^#[0-9a-fA-F]{6}$/.test(value); }
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function resolveBoardId() {
