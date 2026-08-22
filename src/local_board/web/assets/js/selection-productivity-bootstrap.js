@@ -47,12 +47,32 @@ if (!InputController.prototype.__selectionProductivityBootstrap) {
       clientId: this.clientId,
       showToast: showBoardToast,
     });
-    // Area-selection toolbar is owned by SelectionInteractionV2 rather than the
-    // old object toolbar. Expose the same controller so its button can call the
-    // exact same OCR pipeline.
     this.selection.formulaTransform = formulaTransform;
+    installAreaFormulaButton(this.selection, formulaTransform);
   };
   InputController.prototype.__selectionProductivityBootstrap = true;
+}
+
+function installAreaFormulaButton(selection, formulaTransform) {
+  const container = document.querySelector(".area-context-bar .image-context-normal");
+  if (!container || container.querySelector("[data-area-formula]") || !formulaTransform) return;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.dataset.areaFormula = "true";
+  button.className = "formula-transform-action";
+  button.textContent = "Преобразовать формулу";
+  button.title = "Распознать формулу внутри выделенной области";
+  const separator = container.querySelector(".image-context-separator");
+  container.insertBefore(button, separator);
+  button.addEventListener("pointerdown", (event) => event.stopPropagation());
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    formulaTransform.transform().catch((error) => {
+      console.error("Formula transform failed:", error);
+      showBoardToast(String(error?.message || error || "Не удалось преобразовать формулу"), "error");
+    });
+  });
 }
 
 // Safari/iPad can occasionally transition Pencil from contact to hover without
