@@ -1,13 +1,12 @@
 import { FormulaTransformController } from "./formula-transform.js";
 import { InputController } from "./input-controller.js";
-import { installAreaSelection } from "./selection-area.js";
-import { installSelectionDragIntent } from "./selection-drag-intent.js";
+import { installSelectionInteractionV2 } from "./selection-interaction-v2.js";
 import { installSelectionProductivity } from "./selection-productivity.js";
 import { installTouchNavigation } from "./touch-navigation.js";
 
-// Keep Select semantics modular and attach them to the concrete InputController
-// instance after its normal listeners are installed. pen-ui-controls imports this
-// module before app.js constructs InputController, so the prototype is patched in time.
+// Attach the higher-level Select behavior to each concrete InputController.
+// SelectionInteractionV2 is the single owner of click-vs-drag semantics; the
+// older area/drag-intent wrappers are intentionally no longer installed.
 if (!InputController.prototype.__selectionProductivityBootstrap) {
   const originalBind = InputController.prototype.bind;
   InputController.prototype.bind = function bindWithSelectionProductivity() {
@@ -26,29 +25,18 @@ if (!InputController.prototype.__selectionProductivityBootstrap) {
       showToast: showBoardToast,
     });
 
-    // Click selects one item, but a real drag must become a marquee even when
-    // the pointer started directly on handwriting. This prevents the first ink
-    // stroke under the pointer from stealing an intended formula-area drag.
-    installSelectionDragIntent({
-      selection: this.selection,
-      state: this.state,
-      renderer: this.renderer,
-    });
-
-    // Marquee is an area selection, not merely a visual rectangle. Recompute
-    // every intersecting stroke/object on release and then let the productivity
-    // toolbar react to that committed multi-item group immediately.
-    installAreaSelection({
+    const interaction = installSelectionInteractionV2({
       selection: this.selection,
       state: this.state,
       renderer: this.renderer,
       productivity,
+      showToast: showBoardToast,
     });
 
     // Select promotes a second finger to navigation. Keep that state clean and
-    // make two-finger navigation a real pan+pinch gesture instead of zoom-only.
+    // make two-finger navigation a true pan+pinch gesture.
     installTouchNavigation(this);
-    installSelectionEndRecovery(this, productivity);
+    installSelectionEndRecovery(this, productivity, interaction);
 
     new FormulaTransformController({
       boardId: resolveBoardId(),
@@ -64,12 +52,9 @@ if (!InputController.prototype.__selectionProductivityBootstrap) {
 }
 
 // Safari/iPad can occasionally transition Pencil from contact to hover without
-// delivering the pointerup that commits a marquee. The visual symptom is a
-// light-blue dashed rectangle that remains on screen and never becomes a real
-// selection, so no contextual actions can appear. Recover that edge by treating
-// a no-contact Pencil move (pressure=0/buttons=0) or a lost pointer capture as
-// the end of the current Select gesture.
-function installSelectionEndRecovery(input, productivity) {
+// delivering pointerup. Treat no-contact hover or lost capture as release so the
+// one state machine still commits the same click/area action.
+function installSelectionEndRecovery(input, productivity, interaction) {
   const selection = input.selection;
   const canvas = input.canvas;
   let lastPoint = null;
@@ -116,6 +101,7 @@ function installSelectionEndRecovery(input, productivity) {
     try {
       selection.pointerUp(event);
       if (input.selectionTouchPointerId === event.pointerId) input.clearSelectionTouchTracking?.();
+      interaction?.sync?.();
       productivity?.sync?.();
     } finally {
       finishing = false;
