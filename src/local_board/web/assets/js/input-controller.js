@@ -1,6 +1,8 @@
 import { cloneStroke } from "./board-state.js";
 import { createId } from "./id.js";
 
+const MAX_NETWORK_BATCH_POINTS = 128;
+
 export class InputController {
   constructor({ canvas, state, renderer, sendEvent, clientId, onStrokeFinished }) {
     this.canvas = canvas;
@@ -20,6 +22,8 @@ export class InputController {
     this.panAnchor = null;
     this.pinchAnchor = null;
     this.erasedThisGesture = new Set();
+    this.pendingNetworkPoints = [];
+    this.networkFlushHandle = null;
 
     this.bind();
   }
@@ -29,7 +33,17 @@ export class InputController {
     this.canvas.addEventListener("pointermove", (event) => this.onPointerMove(event));
     this.canvas.addEventListener("pointerup", (event) => this.onPointerEnd(event));
     this.canvas.addEventListener("pointercancel", (event) => this.onPointerEnd(event));
+    this.canvas.addEventListener("lostpointercapture", (event) => this.onLostPointerCapture(event));
     this.canvas.addEventListener("wheel", (event) => this.onWheel(event), { passive: false });
+
+    // iPad Safari must never turn a Pencil gesture on the board into text selection,
+    // a callout, drag, or browser gesture.
+    for (const type of ["selectstart", "dragstart", "contextmenu"]) {
+      this.canvas.addEventListener(type, (event) => event.preventDefault());
+    }
+    for (const type of ["gesturestart", "gesturechange", "gestureend"]) {
+      this.canvas.addEventListener(type, (event) => event.preventDefault(), { passive: false });
+    }
   }
 
   setTool(tool) {
@@ -42,27 +56,24 @@ export class InputController {
 
   onPointerDown(event) {
     event.preventDefault();
+    this.clearBrowserSelection();
 
     if (event.pointerType === "touch") {
-      // Palm rejection: a hand resting on the screen must not move the board while
-      // Pencil is drawing/erasing/panning. Finger navigation resumes after Pencil up.
       if (this.isStylusActive()) return;
-
-      this.canvas.setPointerCapture?.(event.pointerId);
+      this.capturePointer(event.pointerId);
       this.touchPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
       this.startTouchGesture();
       return;
     }
 
-    this.canvas.setPointerCapture?.(event.pointerId);
+    this.capturePointer(event.pointerId);
 
-    // A stylus takes priority over any finger gesture already in progress.
     if (this.isStylus(event)) {
+      // Pencil always wins over a finger/palm gesture already touching the screen.
       this.cancelTouchGesture();
     }
 
-    // Drawing is deliberately allow-listed to a real stylus. This is stricter than
-    // merely rejecting `touch`: mouse-like or misclassified palm events cannot ink.
+    // Ink is strictly Pencil-only. Mouse-like or misclassified palm pointers can only pan.
     if (!this.isStylus(event)) {
       this.startPan(event);
       return;
@@ -93,8 +104,7 @@ export class InputController {
 
     if (this.activePointerId !== event.pointerId) return;
 
-    // Non-stylus pointers are navigation-only even while the pen/eraser tool is active.
-    if (!this.isStylus(event)) {
+    if (this.activePointerType !== "pen") {
       this.movePan(event);
       return;
     }
@@ -109,45 +119,70 @@ export class InputController {
       return;
     }
 
-    if (this.currentStrokeId) {
-      // All coalesced samples belong to the already verified active Pencil pointer.
-      // Do not re-filter them: Safari may expose less metadata on coalesced samples.
-      const samples = event.getCoalescedEvents ? event.getCoalescedEvents() : [event];
-      const points = samples.map((sample) => this.eventPoint(sample));
-      if (!points.length) return;
-      const mutation = this.withOp({ type: "stroke.append", stroke_id: this.currentStrokeId, points });
-      this.state.applyEvent(mutation, null, this.clientId);
-      this.sendEvent(mutation);
-      this.renderer.render();
-    }
+    if (!this.currentStrokeId) return;
+
+    // Safari can provide multiple high-frequency Pencil samples in one move event.
+    // Apply all of them locally immediately, but batch network traffic once per frame.
+    const samples = event.getCoalescedEvents ? event.getCoalescedEvents() : [event];
+    const points = samples
+      .filter((sample) => Number.isFinite(sample.clientX) && Number.isFinite(sample.clientY))
+      .map((sample) => this.eventPoint(sample));
+    if (!points.length) return;
+
+    this.state.applyEvent(
+      { type: "stroke.append", stroke_id: this.currentStrokeId, points },
+      null,
+      this.clientId,
+    );
+    this.pendingNetworkPoints.push(...points);
+    this.scheduleNetworkFlush();
+    this.renderer.requestRender();
   }
 
   onPointerEnd(event) {
+    event.preventDefault();
+
     if (event.pointerType === "touch") {
       this.touchPointers.delete(event.pointerId);
+      this.releasePointer(event.pointerId);
       this.resetTouchAnchors();
       if (!this.isStylusActive()) this.renderer.saveView();
       return;
     }
 
-    if (this.currentStrokeId && this.activePointerId === event.pointerId && this.isStylus(event)) {
+    this.finishActivePointer(event.pointerId);
+  }
+
+  onLostPointerCapture(event) {
+    // Unexpected capture loss must never leave the controller in a stuck "Pencil down" state.
+    if (this.activePointerId === event.pointerId) {
+      this.finishActivePointer(event.pointerId, { releaseCapture: false });
+    }
+  }
+
+  finishActivePointer(pointerId, { releaseCapture = true } = {}) {
+    if (this.activePointerId !== pointerId) return;
+
+    if (this.activePointerType === "pen" && this.currentStrokeId) {
       const strokeId = this.currentStrokeId;
+      this.flushPendingStrokePoints();
       const mutation = this.withOp({ type: "stroke.end", stroke_id: strokeId });
       this.state.applyEvent(mutation, null, this.clientId);
       this.sendEvent(mutation);
       const finished = this.state.getStroke(strokeId);
       if (finished) this.onStrokeFinished(cloneStroke(finished));
       this.currentStrokeId = null;
-      this.renderer.render();
+      this.renderer.requestRender();
     }
 
-    if (this.activePointerId === event.pointerId) {
-      this.activePointerId = null;
-      this.activePointerType = null;
-      this.panAnchor = null;
-      this.erasedThisGesture.clear();
-      this.renderer.saveView();
-    }
+    if (releaseCapture) this.releasePointer(pointerId);
+    this.activePointerId = null;
+    this.activePointerType = null;
+    this.panAnchor = null;
+    this.erasedThisGesture.clear();
+    this.pendingNetworkPoints.length = 0;
+    this.cancelScheduledNetworkFlush();
+    this.renderer.saveView();
   }
 
   isStylus(event) {
@@ -164,6 +199,7 @@ export class InputController {
     this.activePointerId = event.pointerId;
     this.activePointerType = "pen";
     this.currentStrokeId = createId();
+    this.pendingNetworkPoints.length = 0;
     const stroke = {
       id: this.currentStrokeId,
       color: this.color,
@@ -174,7 +210,7 @@ export class InputController {
     const mutation = this.withOp({ type: "stroke.begin", stroke });
     this.state.applyEvent(mutation, null, this.clientId);
     this.sendEvent(mutation);
-    this.renderer.render();
+    this.renderer.requestRender();
   }
 
   startPan(event) {
@@ -232,6 +268,7 @@ export class InputController {
   }
 
   cancelTouchGesture() {
+    for (const pointerId of this.touchPointers.keys()) this.releasePointer(pointerId);
     this.touchPointers.clear();
     this.panAnchor = null;
     this.pinchAnchor = null;
@@ -241,6 +278,32 @@ export class InputController {
     this.panAnchor = null;
     this.pinchAnchor = null;
     if (this.touchPointers.size) this.startTouchGesture();
+  }
+
+  scheduleNetworkFlush() {
+    if (this.networkFlushHandle !== null) return;
+    this.networkFlushHandle = requestAnimationFrame(() => {
+      this.networkFlushHandle = null;
+      this.flushPendingStrokePoints();
+    });
+  }
+
+  flushPendingStrokePoints() {
+    if (!this.currentStrokeId || !this.pendingNetworkPoints.length) return;
+    while (this.pendingNetworkPoints.length) {
+      const points = this.pendingNetworkPoints.splice(0, MAX_NETWORK_BATCH_POINTS);
+      this.sendEvent(this.withOp({
+        type: "stroke.append",
+        stroke_id: this.currentStrokeId,
+        points,
+      }));
+    }
+  }
+
+  cancelScheduledNetworkFlush() {
+    if (this.networkFlushHandle === null) return;
+    cancelAnimationFrame(this.networkFlushHandle);
+    this.networkFlushHandle = null;
   }
 
   onWheel(event) {
@@ -258,16 +321,37 @@ export class InputController {
     const mutation = this.withOp({ type: "stroke.delete", stroke_id: hit.id });
     this.state.applyEvent(mutation, null, this.clientId);
     this.sendEvent(mutation);
-    this.renderer.render();
+    this.renderer.requestRender();
   }
 
   eventPoint(event) {
     const point = this.renderer.screenToWorld(event.clientX, event.clientY);
+    const pressure = Number(event.pressure);
     return {
       x: point.x,
       y: point.y,
-      pressure: event.pressure || 0.45,
+      pressure: Number.isFinite(pressure) && pressure > 0 ? pressure : 0.45,
     };
+  }
+
+  capturePointer(pointerId) {
+    try {
+      this.canvas.setPointerCapture?.(pointerId);
+    } catch (_) {
+      // Safari may reject capture during rapid pointer transitions; drawing still works.
+    }
+  }
+
+  releasePointer(pointerId) {
+    try {
+      if (this.canvas.hasPointerCapture?.(pointerId)) this.canvas.releasePointerCapture(pointerId);
+    } catch (_) {}
+  }
+
+  clearBrowserSelection() {
+    try {
+      window.getSelection?.()?.removeAllRanges();
+    } catch (_) {}
   }
 
   withOp(event) {
