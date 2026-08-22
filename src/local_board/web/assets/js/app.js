@@ -12,9 +12,10 @@ const canvas = document.getElementById("board");
 const renderer = new CanvasRenderer(canvas, state, boardId);
 const localUndo = [];
 const localRedo = [];
+const inputDebug = createInputDiagnostics();
 
 document.getElementById("boardName").textContent = boardId;
-bindInputDiagnostics(canvas);
+bindInputDiagnostics(canvas, inputDebug);
 
 let realtime;
 const input = new InputController({
@@ -41,9 +42,17 @@ realtime = new RealtimeClient({
     renderer.render();
   },
   onEvent: (event, revision, actorId) => {
+    // Apply network state immediately but paint at most once per display frame.
+    // Multiple WebSocket append packets arriving in the same frame are therefore
+    // rendered together instead of forcing repeated full synchronous paints.
     state.applyEvent(event, revision, actorId);
-    renderer.render();
-    updateUndoButtons();
+    renderer.requestRender();
+
+    // Remote append traffic is hot-path data; it cannot change our local undo
+    // availability, so avoid needless DOM work for every packet.
+    if (event.type !== "stroke.append" && event.type !== "stroke.begin") {
+      updateUndoButtons();
+    }
   },
   onPresence: updatePresence,
   onStatus: updateConnection,
@@ -102,7 +111,7 @@ function undoLocalStroke() {
     const event = { type: "stroke.delete", op_id: createId(), stroke_id: strokeId };
     state.applyEvent(event, null, clientId);
     realtime.send(event);
-    renderer.render();
+    renderer.requestRender();
     break;
   }
   updateUndoButtons();
@@ -125,7 +134,7 @@ function redoLocalStroke() {
   state.applyEvent(event, null, clientId);
   realtime.send(event);
   localUndo.push(stroke.id);
-  renderer.render();
+  renderer.requestRender();
   updateUndoButtons();
 }
 
@@ -136,7 +145,7 @@ function clearBoard() {
   realtime.send(event);
   localUndo.length = 0;
   localRedo.length = 0;
-  renderer.render();
+  renderer.requestRender();
   updateUndoButtons();
 }
 
@@ -203,51 +212,54 @@ function updateConnection(status) {
   }
 }
 
-function bindInputDiagnostics(targetCanvas) {
-  const debug = createInputDiagnostics();
+function bindInputDiagnostics(targetCanvas, debug) {
   if (!debug) return;
 
+  let lastPointerMoveLog = 0;
+  let lastTouchMoveLog = 0;
+
+  // Log every contact type, not just pointerType=pen. If Safari classifies Pencil
+  // differently on a particular iPad/iOS version, the overlay must reveal that.
   targetCanvas.addEventListener("pointerdown", (event) => {
-    if (event.pointerType === "pen") debug.pointer("PD", event);
+    debug.pointer("PD", event);
   }, { capture: true });
 
   window.addEventListener("pointermove", (event) => {
-    if (event.pointerType !== "pen") return;
     const pressure = Number(event.pressure || 0);
     const buttons = Number(event.buttons || 0);
-    if (pressure > 0 || buttons !== 0) debug.pointer("PM-contact", event);
+    if (pressure <= 0 && buttons === 0) return;
+    const now = performance.now();
+    if (now - lastPointerMoveLog < 50) return;
+    lastPointerMoveLog = now;
+    debug.pointer("PM-contact", event);
   }, { capture: true });
 
   for (const type of ["pointerup", "pointercancel"]) {
     window.addEventListener(type, (event) => {
-      if (event.pointerType === "pen") debug.pointer(type === "pointerup" ? "PU" : "PC", event);
+      debug.pointer(type === "pointerup" ? "PU" : "PC", event);
     }, { capture: true });
   }
 
   targetCanvas.addEventListener("touchstart", (event) => {
-    const touch = firstStylusTouch(event.changedTouches);
-    if (touch) debug.touch("TS", touch);
+    for (const touch of Array.from(event.changedTouches || [])) debug.touch("TS", touch);
   }, { capture: true });
 
   window.addEventListener("touchmove", (event) => {
-    const touch = firstStylusTouch(event.changedTouches);
-    if (touch) debug.touch("TM", touch);
+    const now = performance.now();
+    if (now - lastTouchMoveLog < 50) return;
+    lastTouchMoveLog = now;
+    for (const touch of Array.from(event.changedTouches || [])) debug.touch("TM", touch);
   }, { capture: true });
 
   for (const type of ["touchend", "touchcancel"]) {
     window.addEventListener(type, (event) => {
-      const touch = firstStylusTouch(event.changedTouches);
-      if (touch) debug.touch(type === "touchend" ? "TE" : "TC", touch);
+      for (const touch of Array.from(event.changedTouches || [])) {
+        debug.touch(type === "touchend" ? "TE" : "TC", touch);
+      }
     }, { capture: true });
   }
-}
 
-function firstStylusTouch(touchList) {
-  if (!touchList) return null;
-  for (const touch of Array.from(touchList)) {
-    if (touch.touchType === "stylus") return touch;
-  }
-  return null;
+  debug.note(`ua ${navigator.userAgent}`);
 }
 
 function resolveBoardId() {
