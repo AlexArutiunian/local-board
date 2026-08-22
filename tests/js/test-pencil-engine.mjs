@@ -36,8 +36,10 @@ function makeHarness() {
 
   const renderer = {
     renderRequests: 0,
+    baseInvalidations: 0,
     screenToWorld(x, y) { return { x, y }; },
     requestRender() { this.renderRequests += 1; },
+    invalidateBase() { this.baseInvalidations += 1; },
   };
 
   const engine = new PencilEngine({
@@ -69,7 +71,7 @@ function penEvent(pointerId, x = 10, y = 20, { pressure = 0.6, buttons = 1, samp
 }
 
 {
-  const { engine, sent, finished } = makeHarness();
+  const { engine, sent, finished, renderer } = makeHarness();
   engine.begin(penEvent(1), { color: "#111111", width: 4 });
   assert.equal(engine.ownsPointer(1), true);
 
@@ -78,6 +80,7 @@ function penEvent(pointerId, x = 10, y = 20, { pressure = 0.6, buttons = 1, samp
 
   assert.equal(engine.ownsPointer(2), true, "immediate next Pencil contact must be accepted");
   assert.equal(finished.length, 1);
+  assert.equal(renderer.baseInvalidations, 1, "finished ink must enter the completed-layer cache");
   assert.deepEqual(sent.map((event) => event.type), ["stroke.begin", "stroke.end", "stroke.begin"]);
 }
 
