@@ -50,20 +50,26 @@ A four-digit code is deliberately optimized for classroom UX, not security. It i
 
 ### Frontend
 
-- native Canvas 2D + Pointer Events;
-- `PencilEngine` owns the ink contact state machine separately from touch/mouse navigation;
-- `pointerType === "pen"` is used to classify a new contact on `pointerdown`; after that, the tracked `pointerId` is authoritative for the lifetime of that contact;
-- a new Pencil `pointerdown` always wins: if WebKit left an older pen session stale, it is finalized immediately and the new stroke starts without an artificial waiting period;
-- Pencil does **not** use explicit `setPointerCapture()` / `releasePointerCapture()`; terminal events are observed at `window` level and the direct-manipulation pointer keeps normal implicit capture semantics;
-- if a terminal event is lost, a hover-like move with no buttons/pressure closes the stale Pencil session defensively;
-- no synchronous persistence (`localStorage`, file/network wait, etc.) is allowed in the Pencil down/move/up hot path;
+- native Canvas 2D with a dedicated `PencilEngine` separated from touch/mouse navigation;
+- normal Pencil path is `pointerdown → pointermove* → pointerup`;
+- `pointerType === "pen"` classifies normal pointer contacts, then tracked pointer identity is authoritative for that contact;
+- WebKit recovery does **not** assume every fast `pointerdown`/`pointerup` will arrive perfectly;
+- if no active stroke exists and a `pointermove` reports pen contact through `pressure > 0` or `buttons != 0`, that move reconstructs a missing `pointerdown` and starts the stroke immediately;
+- iPad Safari also has a secondary Touch Events fallback: `Touch.touchType === "stylus"` is accepted only when Pointer Events did not establish the Pencil contact;
+- stylus `touchend` is a secondary terminal signal, so a lost `pointerup` cannot leave Pencil state stuck between letters;
+- a new normal Pencil `pointerdown` always wins: stale older Pencil state is finalized before the new stroke begins;
+- Pencil does **not** use explicit `setPointerCapture()` / `releasePointerCapture()`; terminal pointer events are observed at `window` level;
+- no artificial debounce/cooldown is allowed between Pencil contacts;
+- no synchronous persistence or full-stroke cloning is allowed in Pencil down/move/up hot paths;
+- undo records only the completed stroke id on Pencil release; a full stroke copy is created later only if Undo is actually requested;
 - touch/palm never creates ink;
-- while Pencil is active, touch/palm is ignored so the canvas does not move under the hand;
+- while Pencil is active, finger/palm navigation is ignored so the canvas does not move under the hand;
 - otherwise one finger pans and two fingers pinch-zoom;
-- Safari text selection, touch callout, drag and context-menu gestures are suppressed on the board surface;
-- coalesced Pencil samples are applied to local state immediately when the browser provides them;
+- Safari text selection, touch callout, drag, context menu and browser gesture handling are suppressed on the board surface;
+- coalesced Pencil samples are applied to local state immediately when available;
 - rendering is scheduled at most once per animation frame;
-- outgoing `stroke.append` points are batched once per animation frame (bounded chunks) and flushed before `stroke.end`;
+- outgoing `stroke.append` points are batched once per animation frame in bounded chunks and flushed before `stroke.end`;
+- realtime transport is downstream of local rendering and must never gate whether a Pencil contact is accepted;
 - viewport (`x/y/zoom`) is local per browser and is never synchronized;
 - API requests use relative same-origin paths;
 - WebSocket derives `ws://` / `wss://` from `location.protocol`;
