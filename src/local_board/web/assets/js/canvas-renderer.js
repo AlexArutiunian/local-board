@@ -1,3 +1,6 @@
+import { combinedBounds, normalizeRect, parseItemKey } from "./board-geometry.js";
+import { ImageCache } from "./image-cache.js";
+
 export class CanvasRenderer {
   constructor(canvas, state, boardId) {
     this.canvas = canvas;
@@ -8,6 +11,13 @@ export class CanvasRenderer {
     this.boardId = boardId;
     this.renderHandle = null;
     this.onViewChange = null;
+    this.selectionKeys = new Set();
+    this.marquee = null;
+
+    this.imageCache = new ImageCache(() => {
+      this.invalidateBase();
+      this.requestRender();
+    });
 
     this.baseCanvas = document.createElement("canvas");
     this.baseCtx = this.baseCanvas.getContext("2d");
@@ -31,27 +41,29 @@ export class CanvasRenderer {
     this.emitViewChange();
   }
 
-  emitViewChange() {
-    this.onViewChange?.({ ...this.view });
+  emitViewChange() { this.onViewChange?.({ ...this.view }); }
+
+  setSelection(keys) {
+    this.selectionKeys = new Set(keys || []);
+    this.requestRender();
+  }
+
+  setMarquee(rect) {
+    this.marquee = rect ? normalizeRect(rect) : null;
+    this.requestRender();
   }
 
   loadView(boardId) {
     try {
       const raw = JSON.parse(localStorage.getItem(`local-board:view:${boardId}`) || "null");
       if (raw && Number.isFinite(raw.zoom)) {
-        return {
-          x: Number(raw.x) || 0,
-          y: Number(raw.y) || 0,
-          zoom: clamp(Number(raw.zoom) || 1, 0.2, 5),
-        };
+        return { x: Number(raw.x) || 0, y: Number(raw.y) || 0, zoom: clamp(Number(raw.zoom) || 1, 0.2, 5) };
       }
     } catch (_) {}
     return { x: 0, y: 0, zoom: 1 };
   }
 
-  saveView() {
-    localStorage.setItem(`local-board:view:${this.boardId}`, JSON.stringify(this.view));
-  }
+  saveView() { localStorage.setItem(`local-board:view:${this.boardId}`, JSON.stringify(this.view)); }
 
   resize() {
     this.cancelFollowAnimation();
@@ -70,10 +82,7 @@ export class CanvasRenderer {
     this.emitViewChange();
   }
 
-  getViewportSize() {
-    return { width: this.canvas.width / this.dpr, height: this.canvas.height / this.dpr };
-  }
-
+  getViewportSize() { return { width: this.canvas.width / this.dpr, height: this.canvas.height / this.dpr }; }
   invalidateBase() { this.baseDirty = true; }
 
   requestRender() {
@@ -84,7 +93,7 @@ export class CanvasRenderer {
     });
   }
 
-  render() {
+  render({ showSelection = true } = {}) {
     if (this.cachedBaseGeneration !== this.state.baseGeneration) this.baseDirty = true;
     if (!this.baseDirty && this.shouldRefreshTransformedBase()) this.baseDirty = true;
     if (this.baseDirty) this.rebuildBase();
@@ -99,6 +108,7 @@ export class CanvasRenderer {
     for (const stroke of this.state.listStrokes()) {
       if (!stroke.complete) this.drawStrokeTo(ctx, stroke);
     }
+    if (showSelection) this.drawSelectionOverlay(ctx);
   }
 
   drawCachedBase(ctx) {
@@ -132,6 +142,7 @@ export class CanvasRenderer {
     ctx.clearRect(0, 0, this.baseCanvas.width, this.baseCanvas.height);
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     this.drawGridTo(ctx, width, height);
+    for (const object of this.state.listObjects()) this.drawObjectTo(ctx, object);
     for (const stroke of this.state.listStrokes()) {
       if (stroke.complete) this.drawStrokeTo(ctx, stroke);
     }
@@ -157,6 +168,25 @@ export class CanvasRenderer {
           ctx.fill();
         }
       }
+    }
+    ctx.restore();
+  }
+
+  drawObjectTo(ctx, object) {
+    if (object.kind !== "image") return;
+    const topLeft = this.worldToScreen(object);
+    const width = object.width * this.view.zoom;
+    const height = object.height * this.view.zoom;
+    const image = this.imageCache.get(object.src);
+    ctx.save();
+    if (image) {
+      ctx.drawImage(image, topLeft.x, topLeft.y, width, height);
+    } else {
+      ctx.fillStyle = "#f5f5f4";
+      ctx.strokeStyle = "#d6d3d1";
+      ctx.lineWidth = 1;
+      ctx.fillRect(topLeft.x, topLeft.y, width, height);
+      ctx.strokeRect(topLeft.x, topLeft.y, width, height);
     }
     ctx.restore();
   }
@@ -195,6 +225,43 @@ export class CanvasRenderer {
     ctx.restore();
   }
 
+  drawSelectionOverlay(ctx) {
+    ctx.save();
+    if (this.marquee) {
+      const start = this.worldToScreen({ x: this.marquee.x, y: this.marquee.y });
+      const width = this.marquee.width * this.view.zoom;
+      const height = this.marquee.height * this.view.zoom;
+      ctx.fillStyle = "rgba(37,99,235,.08)";
+      ctx.strokeStyle = "rgba(37,99,235,.75)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([5, 4]);
+      ctx.fillRect(start.x, start.y, width, height);
+      ctx.strokeRect(start.x, start.y, width, height);
+    }
+
+    const bounds = combinedBounds(this.state, this.selectionKeys);
+    if (bounds) {
+      const start = this.worldToScreen(bounds);
+      const width = bounds.width * this.view.zoom;
+      const height = bounds.height * this.view.zoom;
+      ctx.strokeStyle = "#2563eb";
+      ctx.fillStyle = "#ffffff";
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([]);
+      ctx.strokeRect(start.x, start.y, width, height);
+      const single = this.selectionKeys.size === 1 ? parseItemKey([...this.selectionKeys][0]) : null;
+      if (single?.kind === "object") {
+        for (const [x, y] of [[start.x, start.y], [start.x + width, start.y], [start.x, start.y + height], [start.x + width, start.y + height]]) {
+          ctx.beginPath();
+          ctx.arc(x, y, 4.5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+        }
+      }
+    }
+    ctx.restore();
+  }
+
   screenToWorld(clientX, clientY) {
     const rect = this.canvas.getBoundingClientRect();
     const x = clientX - rect.left;
@@ -202,9 +269,7 @@ export class CanvasRenderer {
     return { x: (x - this.view.x) / this.view.zoom, y: (y - this.view.y) / this.view.zoom };
   }
 
-  worldToScreen(point) {
-    return { x: point.x * this.view.zoom + this.view.x, y: point.y * this.view.zoom + this.view.y };
-  }
+  worldToScreen(point) { return { x: point.x * this.view.zoom + this.view.x, y: point.y * this.view.zoom + this.view.y }; }
 
   smoothPanBy(dx, dy, { timeConstant = 340 } = {}) {
     if (!Number.isFinite(dx) || !Number.isFinite(dy)) return false;
@@ -230,7 +295,6 @@ export class CanvasRenderer {
     if (positionDistance < 0.5 && zoomDistance < 0.002) return false;
     this.followTarget = next;
     this.followTimeConstant = clamp(Number(timeConstant) || 340, 80, 1200);
-
     if (this.prefersReducedMotion) {
       this.view = { ...next };
       this.followTarget = null;
@@ -253,16 +317,12 @@ export class CanvasRenderer {
     const previous = this.followLastTimestamp ?? timestamp - 16.67;
     const dt = clamp(timestamp - previous, 8, 50);
     this.followLastTimestamp = timestamp;
-    const remainingX = this.followTarget.x - this.view.x;
-    const remainingY = this.followTarget.y - this.view.y;
-    const remainingZoom = this.followTarget.zoom - this.view.zoom;
     const alpha = 1 - Math.exp(-dt / this.followTimeConstant);
-    this.view.x += remainingX * alpha;
-    this.view.y += remainingY * alpha;
-    this.view.zoom += remainingZoom * alpha;
+    this.view.x += (this.followTarget.x - this.view.x) * alpha;
+    this.view.y += (this.followTarget.y - this.view.y) * alpha;
+    this.view.zoom += (this.followTarget.zoom - this.view.zoom) * alpha;
     this.emitViewChange();
     this.renderFollowFrame();
-
     const afterX = this.followTarget.x - this.view.x;
     const afterY = this.followTarget.y - this.view.y;
     const afterZoom = Math.abs(Math.log(this.followTarget.zoom / this.view.zoom));
@@ -336,16 +396,16 @@ export class CanvasRenderer {
 
   exportPng() {
     this.invalidateBase();
-    this.render();
+    this.render({ showSelection: false });
     const anchor = document.createElement("a");
     anchor.href = this.canvas.toDataURL("image/png");
     anchor.download = `local-board-${this.boardId}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.png`;
     anchor.click();
+    this.requestRender();
   }
 }
 
 function averagePressure(points) {
   return points.reduce((sum, point) => sum + Number(point.pressure ?? 0.5), 0) / points.length;
 }
-
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
