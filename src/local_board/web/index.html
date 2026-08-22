@@ -5,41 +5,41 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-  <meta name="theme-color" content="#f5f5f4" />
+  <meta name="theme-color" content="#f7f7f6" />
   <title>Local Board</title>
   <link rel="stylesheet" href="/assets/css/app.css" />
 </head>
 <body>
   <div id="app">
-    <header class="topbar">
-      <a class="brand" href="/" aria-label="На главную">
-        <span class="brand-mark"></span>
-        <div>
-          <strong>Local Board</strong>
-          <span id="boardName" class="board-name">room</span>
-        </div>
-      </a>
-
-      <div class="topbar-actions">
-        <button id="shareRoom" class="share-room" type="button" title="Скопировать ссылку на комнату">Поделиться</button>
-        <div class="presence" aria-live="polite">
-          <span id="connectionDot" class="presence-dot offline"></span>
-          <span id="connectionText">Подключение…</span>
-          <span class="separator">•</span>
-          <span id="participants">0 участников</span>
-        </div>
-      </div>
-    </header>
-
     <main id="stage">
       <canvas id="board" aria-label="Совместная доска"></canvas>
 
+      <header class="topbar" aria-label="Панель комнаты">
+        <a class="topbar-card brand" href="/" aria-label="К списку досок">
+          <span class="brand-mark"></span>
+          <div>
+            <strong>Local Board</strong>
+            <span id="boardName" class="board-name">room</span>
+          </div>
+        </a>
+
+        <div class="topbar-card topbar-actions">
+          <div class="presence" aria-live="polite">
+            <span id="connectionDot" class="presence-dot offline"></span>
+            <span id="connectionText">Подключение…</span>
+            <span class="separator">•</span>
+            <span id="participants">0 участников</span>
+          </div>
+          <button id="shareRoom" class="share-room" type="button" title="Скопировать ссылку на комнату">Поделиться</button>
+        </div>
+      </header>
+
       <div class="toolbar" role="toolbar" aria-label="Инструменты доски">
         <div class="tool-section primary-tools">
-          <button class="tool icon-button active" data-tool="pen" title="Ручка" aria-label="Ручка">
+          <button class="tool icon-button active" data-tool="pen" title="Ручка — рисует только Apple Pencil" aria-label="Ручка">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l4.3-1 10.8-10.8a2.15 2.15 0 0 0 0-3L18.8 4.9a2.15 2.15 0 0 0-3 0L5 15.7 4 20Z"/><path d="m14.8 5.9 3.3 3.3"/></svg>
           </button>
-          <button class="tool icon-button" data-tool="eraser" title="Ластик" aria-label="Ластик">
+          <button class="tool icon-button" data-tool="eraser" title="Ластик — Pencil или мышь" aria-label="Ластик">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7.2 18.5-3.1-3.1a2 2 0 0 1 0-2.8l7.7-7.7a2 2 0 0 1 2.8 0l5.3 5.3a2 2 0 0 1 0 2.8l-5.5 5.5H7.2Z"/><path d="m9.2 7.5 7.3 7.3"/><path d="M7.2 18.5H20"/></svg>
           </button>
           <button class="tool icon-button" data-tool="pan" title="Перемещение" aria-label="Перемещение">
@@ -49,7 +49,7 @@
 
         <div class="divider"></div>
 
-        <div class="tool-section">
+        <div class="tool-section drawing-controls">
           <button id="colorTrigger" class="color-trigger" type="button" title="Выбрать цвет" aria-label="Цвет линии: чёрный" aria-expanded="false">
             <span id="currentColorSwatch" class="current-color-swatch" style="--c:#111111"></span>
             <svg class="chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
@@ -65,16 +65,17 @@
         <div class="divider"></div>
 
         <div class="tool-section history-tools">
-          <button id="undo" class="icon-button" title="Отменить" aria-label="Отменить">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 8-4 4 4 4"/><path d="M5 12h7.5a5.5 5.5 0 0 1 5.5 5.5"/></svg>
-          </button>
-          <button id="redo" class="icon-button" title="Вернуть" aria-label="Вернуть">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 8 4 4-4 4"/><path d="M19 12h-7.5A5.5 5.5 0 0 0 6 17.5"/></svg>
-          </button>
-          <button id="goToLast" class="icon-button" title="К последнему месту письма" aria-label="К последнему месту письма" disabled>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="1.6"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
-          </button>
-          <button id="resetView" class="zoom-reset" title="Сбросить масштаб и положение">100%</button>
+          <button id="undo" class="icon-button" title="Отменить" aria-label="Отменить"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 8-4 4 4 4"/><path d="M5 12h7.5a5.5 5.5 0 0 1 5.5 5.5"/></svg></button>
+          <button id="redo" class="icon-button" title="Вернуть" aria-label="Вернуть"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 8 4 4-4 4"/><path d="M19 12h-7.5A5.5 5.5 0 0 0 6 17.5"/></svg></button>
+          <button id="goToLast" class="icon-button" title="К последнему месту письма" aria-label="К последнему месту письма" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="1.6"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></button>
+          <button id="zoomReset" class="zoom-reset" title="Текущий масштаб. Нажми, чтобы вернуть 100%">100%</button>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="tool-section camera-tools" aria-label="Автоматическая камера">
+          <button id="autoFollow" class="icon-button toggle-button" title="Автоследование за местом письма" aria-label="Автоследование"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></button>
+          <button id="autoScale" class="icon-button toggle-button" title="Автомасштаб под пишущее устройство" aria-label="Автомасштаб"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.5"/><path d="m15 15 5 5M8 10.5h5M10.5 8v5"/></svg></button>
         </div>
 
         <div class="divider"></div>
@@ -97,15 +98,10 @@
           <button class="color-option" data-color="#0891b2" style="--c:#0891b2" aria-label="Бирюзовый"></button>
           <button class="color-option" data-color="#57534e" style="--c:#57534e" aria-label="Серый"></button>
         </div>
-        <label class="custom-color-row">
-          <span>Свой цвет</span>
-          <input id="customColor" type="color" value="#111111" aria-label="Выбрать произвольный цвет" />
-        </label>
+        <label class="custom-color-row"><span>Свой цвет</span><input id="customColor" type="color" value="#111111" aria-label="Выбрать произвольный цвет" /></label>
       </div>
 
-      <div id="offlineBanner" class="offline-banner hidden">
-        Соединение потеряно. Изменения сохраняются локально и будут отправлены после переподключения.
-      </div>
+      <div id="offlineBanner" class="offline-banner hidden">Соединение потеряно. Изменения будут отправлены после переподключения.</div>
     </main>
   </div>
 
