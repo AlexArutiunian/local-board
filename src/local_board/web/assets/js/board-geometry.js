@@ -51,17 +51,20 @@ export function allItemKeys(state) {
 }
 
 export function hitTest(state, point, tolerance = 8) {
+  // Renderer paints image objects first and ink above them, so selection must use
+  // the same visual stacking order: a visible handwritten annotation wins over
+  // the image behind it.
+  const strokes = state.listStrokes();
+  for (let i = strokes.length - 1; i >= 0; i -= 1) {
+    const stroke = strokes[i];
+    if (distanceToStroke(point, stroke) <= tolerance + Number(stroke.width || 4) / 2) return strokeKey(stroke.id);
+  }
+
   const objects = state.listObjects();
   for (let i = objects.length - 1; i >= 0; i -= 1) {
     const object = objects[i];
     const bounds = objectBounds(object);
     if (pointInExpandedRect(point, bounds, tolerance)) return objectKey(object.id);
-  }
-
-  const strokes = state.listStrokes();
-  for (let i = strokes.length - 1; i >= 0; i -= 1) {
-    const stroke = strokes[i];
-    if (distanceToStroke(point, stroke) <= tolerance + Number(stroke.width || 4) / 2) return strokeKey(stroke.id);
   }
   return null;
 }
