@@ -86,6 +86,11 @@ Assets live under `~/.local/share/local-board/assets/<room>/`. The server reject
 - normal Pencil path is `pointerdown → pointermove* → pointerup` plus WebKit recovery from contact-bearing `pointermove` and stylus `TouchEvent` fallback;
 - Pencil ink has no debounce/cooldown and no synchronous persistence in the hot path;
 - coalesced samples render locally before network transport;
+- **tablet object routing is pointer-type aware**: a normal one-finger contact that starts inside an image is temporarily routed to image selection/move, while Apple Pencil continues to use the active ink/eraser/pan semantics;
+- selecting or inserting an image does not switch the active drawing tool; if Select happened to be active while a finger-selected image is open, Pencil is treated as Pen until the image edit is dismissed;
+- touching empty canvas with one finger clears image selection and immediately continues through the ordinary navigation/direct-input path, so object editing has no sticky mode;
+- when a second finger arrives during an image drag/crop gesture, the object preview is cancelled and both contacts are promoted to the standard pinch/pan gesture;
+- crop mode keeps its own touch routing: one finger manipulates crop handles/area rather than moving the whole image; Pencil contact cancels the active crop session and resumes drawing;
 - a separate local `directInkEnabled` preference may deliberately route Pen-tool mouse/touch contacts into `PencilEngine` with `pointer_type` equal to `mouse` or `touch`;
 - direct ink is **off by default** and stored per browser, so enabling it for one participant does not alter other participants;
 - with direct ink enabled, Pen + LMB/one finger draws and Eraser + one finger can erase; selecting Pan still routes mouse/touch to navigation;
@@ -114,11 +119,25 @@ Supported interactions:
 - a single selected image can resize from its corner while preserving aspect ratio;
 - when exactly one image is selected, a local contextual toolbar is anchored to that image instead of adding image actions to the global bottom toolbar;
 - contextual image actions: crop, copy, duplicate, image-layer front/back, reset crop and delete;
+- the delete action is explicitly labelled `Удалить`; leaving image edit is done by touching empty canvas, not by a misleading destructive close icon;
 - `Ctrl/Cmd+C` stores the selected image object for board-local paste, `Ctrl/Cmd+V` duplicates it when the system clipboard does not contain an external image file, and `Ctrl/Cmd+D` duplicates directly;
 - double-clicking a selectable image enters crop mode;
 - crop mode has eight handles plus a draggable crop area and explicit Apply/Cancel.
 
 Transforms are committed as semantic realtime mutations (`stroke.translate`, `object.update`, `object.reorder`) rather than retransmitting historical points/image bytes. Applying crop commits geometry plus normalized `crop_*` values in one `object.update`, so peers and reconnect snapshots render the same crop.
+
+### Local undo/redo
+
+`LocalHistoryController` records only mutations initiated by the local browser. Remote peer events never enter another participant's local undo stack.
+
+Current reversible actions include:
+
+- stroke creation;
+- stroke deletion/eraser;
+- image creation/duplication/paste (`object.create`);
+- image deletion (`object.delete`).
+
+`BoardState` keeps bounded tombstone caches for deleted strokes and deleted image objects. Image tombstones retain geometry, asset URL and crop metadata, allowing `Undo` after the contextual `Удалить` action to reconstruct the same image with `object.create`; `Redo` emits `object.delete` again. History replay uses `recordHistory:false`, preventing undo/redo events from recursively becoming new user actions.
 
 ### Images
 
@@ -130,6 +149,7 @@ Transforms are committed as semantic realtime mutations (`stroke.translate`, `ob
 - PNG/JPEG/WEBP/GIF up to the current server limit;
 - upload first, then `object.create` with same-origin asset URL;
 - image bytes are fetched/cached independently by `ImageCache`;
+- image insertion selects the new object but deliberately does not change the active drawing tool;
 - `CanvasRenderer` uses the 9-argument Canvas `drawImage` form to display the selected source crop inside the board object's destination rectangle.
 
 ### Rendering
