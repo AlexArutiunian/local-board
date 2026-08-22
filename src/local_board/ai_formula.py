@@ -58,8 +58,10 @@ async def recognize_formula(
                 ],
             }
         ],
-        "reasoning_effort": "low",
-        "max_tokens": 512,
+        # Ox Alpha requires reasoning. OpenRouter's gateway has a minimum
+        # reasoning budget of 1024 tokens, so max_tokens must stay above it.
+        "reasoning": {"effort": "low", "exclude": True},
+        "max_tokens": 1536,
         "temperature": 0,
         "response_format": {"type": "json_object"},
     }
