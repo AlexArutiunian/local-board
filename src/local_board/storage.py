@@ -29,14 +29,16 @@ def empty_board_document(board_id: str) -> dict[str, Any]:
 
 
 class JsonBoardStore:
-    """Atomic JSON persistence and local asset storage for one server."""
+    """Atomic JSON persistence, append-only activity logs and local assets."""
 
     def __init__(self, data_dir: Path):
         self.data_dir = data_dir
         self.boards_dir = data_dir / "boards"
         self.assets_dir = data_dir / "assets"
+        self.activity_dir = data_dir / "activity"
         self.boards_dir.mkdir(parents=True, exist_ok=True)
         self.assets_dir.mkdir(parents=True, exist_ok=True)
+        self.activity_dir.mkdir(parents=True, exist_ok=True)
         self._write_lock = Lock()
 
     def _path(self, board_id: str) -> Path:
@@ -103,6 +105,27 @@ class JsonBoardStore:
         with self._write_lock:
             tmp.write_text(encoded, encoding="utf-8")
             tmp.replace(path)
+
+    def append_activity(self, board_id: str, record: dict[str, Any]) -> Path:
+        """Append one compact JSON line without retaining historical activity in RAM.
+
+        Logs are sharded by UTC day so a long-running classroom server never grows
+        one giant file. Each call opens, appends and closes the current day's file.
+        """
+        validate_board_id(board_id)
+        timestamp_ms = int(record.get("t", 0))
+        if timestamp_ms <= 0:
+            raise ValueError("activity record requires positive millisecond timestamp")
+        day = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+        room_dir = self.activity_dir / board_id
+        path = room_dir / f"{day}.jsonl"
+        encoded = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
+        with self._write_lock:
+            room_dir.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as file:
+                file.write(encoded)
+                file.write("\n")
+        return path
 
     def save_asset(self, board_id: str, content_type: str, data: bytes) -> str:
         validate_board_id(board_id)
