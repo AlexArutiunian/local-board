@@ -2,7 +2,7 @@ import { combinedBounds, objectKey } from "./board-geometry.js";
 import { createId } from "./id.js";
 
 const MATHJAX_SRC = "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js";
-const MAX_CAPTURE_SIDE = 1400;
+const MAX_CAPTURE_SIDE = 768;
 
 export class FormulaTransformController {
   constructor({ boardId, selection, state, renderer, sendEvent, clientId, showToast = null }) {
@@ -16,6 +16,7 @@ export class FormulaTransformController {
     this.busy = false;
     this.buttons = [];
     this.installButtons();
+    this.prewarmMathJax();
   }
 
   installButtons() {
@@ -30,7 +31,7 @@ export class FormulaTransformController {
     button.dataset.formulaTransform = "true";
     button.className = "formula-transform-action";
     button.textContent = "Преобразовать формулу";
-    button.title = "Распознать выделение и вставить аккуратную формулу рядом";
+    button.title = "Распознать выделенную область и вставить аккуратную формулу рядом";
     container.insertBefore(button, container.querySelector(".image-context-separator"));
     button.addEventListener("click", (event) => {
       event.preventDefault();
@@ -43,10 +44,19 @@ export class FormulaTransformController {
     this.buttons.push(button);
   }
 
+  prewarmMathJax() {
+    const warm = () => ensureMathJax().catch(() => {});
+    if (typeof requestIdleCallback === "function") requestIdleCallback(warm, { timeout: 1600 });
+    else setTimeout(warm, 250);
+  }
+
   async transform() {
     if (this.busy || !this.selection.hasSelection()) return false;
     const keys = this.selection.keys();
-    const bounds = combinedBounds(this.state, keys);
+    // A marquee is a first-class selection area. Use exactly what the user
+    // framed instead of tightening the crop around whichever stroke bounds were
+    // discovered inside it.
+    const bounds = this.selection.getAreaBounds?.() || combinedBounds(this.state, keys);
     if (!bounds || bounds.width < 2 || bounds.height < 2) return false;
 
     this.setBusy(true);
@@ -57,7 +67,7 @@ export class FormulaTransformController {
       const latex = normalizeLatex(result.latex);
       if (!latex) throw new Error("Модель не вернула формулу");
 
-      this.showToast?.("Рисую аккуратную формулу…", "busy");
+      this.showToast?.("Рисую формулу…", "busy");
       const rendered = await renderLatexPng(latex, bounds);
       const upload = await uploadFormulaAsset(this.boardId, rendered.blob);
       const placement = placeFormulaBelowSelection(bounds, rendered.aspectRatio);
@@ -91,17 +101,20 @@ export class FormulaTransformController {
 }
 
 export async function renderSelectionCapture({ state, keys, bounds }) {
-  const pad = Math.max(8, Math.min(28, Math.min(bounds.width, bounds.height) * 0.08));
+  const pad = Math.max(5, Math.min(18, Math.min(bounds.width, bounds.height) * 0.05));
   const capture = {
     x: bounds.x - pad,
     y: bounds.y - pad,
     width: bounds.width + pad * 2,
     height: bounds.height + pad * 2,
   };
-  const scale = Math.min(3, Math.max(1, MAX_CAPTURE_SIDE / Math.max(capture.width, capture.height)));
+  // OCR does not need a retina-sized 1400px crop. Capping the image sharply
+  // reduces base64 upload and vision preprocessing latency while preserving
+  // more than enough detail for handwriting.
+  const scale = Math.min(2, Math.max(1, MAX_CAPTURE_SIDE / Math.max(capture.width, capture.height)));
   const canvas = document.createElement("canvas");
-  canvas.width = Math.max(64, Math.ceil(capture.width * scale));
-  canvas.height = Math.max(64, Math.ceil(capture.height * scale));
+  canvas.width = Math.max(48, Math.ceil(capture.width * scale));
+  canvas.height = Math.max(48, Math.ceil(capture.height * scale));
   const ctx = canvas.getContext("2d");
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -311,6 +324,7 @@ function canvasToBlob(canvas, type) {
 function humanizeFormulaError(error) {
   const message = String(error?.message || error || "Не удалось преобразовать формулу");
   if (message.includes("OPENROUTER_API_KEY")) return "Не задан OPENROUTER_API_KEY на сервере";
+  if (message.includes("explicit :free")) return "Для формул разрешены только бесплатные OpenRouter-модели (:free)";
   return message.slice(0, 220);
 }
 
