@@ -103,11 +103,13 @@ Assets live under `~/.local/share/local-board/assets/<room>/`; cross-room asset 
 
 Apple Pencil retains the active Pen/Eraser/Pan semantics even while a finger-selected image is open. A finger can therefore move a task image while Pencil continues to annotate.
 
+The explicit **Select tool is the exception**: when Select is active, Pencil is intentionally a selection pointer rather than an ink pointer. Leaving Select for Pen immediately restores normal Pencil writing.
+
 `pen-ui-controls.js` handles a separate Safari problem: Pencil taps on app-style HTML controls do not always synthesize a reliable click. It converts a short, low-movement Pencil pointer tap on buttons/menu actions into the same semantic click as a finger and suppresses a possible duplicate native click. Binding is idempotent and is installed before the first profile dialog.
 
 ### Finger / mouse
 
-Default tablet model:
+Default tablet model outside Select:
 
 ```text
 Pencil → ink
@@ -129,24 +131,46 @@ Pan → navigation
 
 Explicit direct ink has priority over image hit-testing, so a student can draw directly over an inserted photo instead of unexpectedly dragging it. Crop mode remains explicit and receives one-finger crop manipulation until it is applied/cancelled.
 
+### Select routing
+
+Select is deliberately **pointer-type neutral** for the first contact:
+
+```text
+Select + mouse → selection
+Select + Apple Pencil → selection
+Select + 1 finger → selection
+Select + 2 fingers → pinch/pan
+```
+
+`selection-productivity-bootstrap.js` installs `selection-productivity.js` before concrete `InputController` instances start receiving input. It extends Select routing without inserting selection branches into the Pencil hot path. A first touch is tracked as a selection contact; if a second touch arrives, the current selection preview is cancelled and `InputController.promoteSelectionTouchToNavigation()` promotes both contacts to the standard pinch/pan gesture.
+
+This is a semantic invariant: **two-finger navigation wins over Select** on touch devices.
+
 ## Selection and image editing
 
-`SelectionController` owns local-only selection/marquee/crop/context UI.
+`SelectionController` owns local-only selection/marquee/crop/context UI. `selection-productivity.js` adds group editing and cross-device routing around that controller.
 
 - `V` — Select;
 - marquee appears only after a real drag threshold;
+- mouse, Pencil and one finger can create the marquee;
 - Shift additive selection;
 - `Ctrl/Cmd+A`, Esc, Delete/Backspace;
 - `Ctrl/Cmd + drag` temporary Select;
 - held RMB + drag temporary marquee; plain RMB click does nothing;
 - selected strokes/images move semantically;
+- after a group exists, pointer-down **anywhere inside its combined blue bounds** starts a pending group move when the point does not target an unrelated item; hitting the exact stroke is not required;
+- two-finger touch during selection move/marquee cancels only the active preview and starts pinch/pan;
+- arbitrary stroke/image groups can be snapshotted to an in-browser selection clipboard;
+- group `Copy`, `Paste`, `Duplicate`, `Delete` and `Done` are exposed in a contextual touch-friendly toolbar near the selected bounds;
+- `Ctrl/Cmd+C`, `Ctrl/Cmd+V`, `Ctrl/Cmd+D` support handwriting/mixed selections in addition to the existing single-image workflow;
+- duplicated handwriting uses new stroke IDs and `stroke.restore`, preserving style and points with a small positional offset;
 - image resize preserves aspect ratio;
-- selected image gets a contextual toolbar near the image;
-- actions: crop, copy, duplicate, image front/back, reset crop, delete, done;
+- a single selected image keeps its richer image-specific contextual toolbar rather than showing both bars;
+- image actions: crop, copy, duplicate, image front/back, reset crop, delete, done;
 - double-click image enters crop;
 - crop uses eight handles + draggable crop area.
 
-Selection outlines, crop overlay and contextual toolbar are never broadcast.
+Selection outlines, clipboards, crop overlay and contextual toolbars are local UI state and are never broadcast. Only semantic mutations resulting from move/delete/paste/etc. enter realtime state.
 
 ## Undo/redo
 
@@ -158,6 +182,8 @@ Current reversible content actions include:
 - image create/delete (including duplicate/paste).
 
 `BoardState` keeps bounded tombstones for deleted strokes and image objects, enabling an image deleted from its contextual menu to return with the same geometry/crop on Undo. Replay uses `recordHistory:false` to avoid recursive history entries.
+
+When selection-productivity duplicates handwriting via `stroke.restore`, it calls the same `onStrokeFinished` history hook used by normal completed ink, so the new stroke can subsequently be undone as a local creation. Multi-item selection actions are currently represented as the underlying semantic events rather than one transactional history record.
 
 Background changes are currently not part of local Undo/Redo.
 
