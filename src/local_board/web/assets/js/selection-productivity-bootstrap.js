@@ -3,6 +3,7 @@ import { InputController } from "./input-controller.js";
 import { installAreaSelection } from "./selection-area.js";
 import { installSelectionDragIntent } from "./selection-drag-intent.js";
 import { installSelectionProductivity } from "./selection-productivity.js";
+import { installTouchNavigation } from "./touch-navigation.js";
 
 // Keep Select semantics modular and attach them to the concrete InputController
 // instance after its normal listeners are installed. pen-ui-controls imports this
@@ -44,6 +45,9 @@ if (!InputController.prototype.__selectionProductivityBootstrap) {
       productivity,
     });
 
+    // Select promotes a second finger to navigation. Keep that state clean and
+    // make two-finger navigation a real pan+pinch gesture instead of zoom-only.
+    installTouchNavigation(this);
     installSelectionEndRecovery(this, productivity);
 
     new FormulaTransformController({
