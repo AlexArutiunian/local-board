@@ -29,3 +29,6 @@ jobs:
           for file in src/local_board/web/assets/js/*.js; do
             node --check "$file"
           done
+
+      - name: Pencil engine tests
+        run: node --experimental-default-type=module tests/js/test-pencil-engine.mjs
