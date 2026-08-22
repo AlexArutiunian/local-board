@@ -1,9 +1,13 @@
 import { AssetController } from "./asset-controller.js";
+import { installBoardBackground } from "./board-background.js";
+import { BACKGROUND_PATTERNS, BACKGROUND_TONES, normalizeBackground } from "./background-presets.js";
 import { BoardState } from "./board-state.js";
 import { CanvasRenderer } from "./canvas-renderer.js";
 import { LocalHistoryController } from "./history-controller.js";
 import { InputController } from "./input-controller.js";
 import { createInputDiagnostics } from "./input-diagnostics.js";
+import { bindPenUiControls } from "./pen-ui-controls.js";
+import { editParticipantProfile, resolveParticipantProfile, roleLabel, shareUrlForRole } from "./participant-profile.js";
 import { RealtimeClient } from "./realtime-client.js";
 import { RemoteFollowController } from "./remote-follow.js";
 import { SelectionController } from "./selection-controller.js";
@@ -11,17 +15,22 @@ import { createId } from "./id.js";
 
 const boardId = resolveBoardId();
 const clientId = getClientId();
+const participantProfile = await resolveParticipantProfile();
 const state = new BoardState();
 const canvas = document.getElementById("board");
 const stage = document.getElementById("stage");
 const renderer = new CanvasRenderer(canvas, state, boardId);
+installBoardBackground(renderer, state);
 const remoteFollow = new RemoteFollowController({ renderer, localClientId: clientId });
 const inputDebug = createInputDiagnostics();
 const history = new LocalHistoryController({ state, onChange: updateUndoButtons });
 let toastTimer = null;
 let realtime;
+let latestRoster = [];
 
 document.getElementById("boardName").textContent = boardId;
+renderSelfProfile();
+bindPenUiControls(document);
 bindInputDiagnostics(canvas, inputDebug);
 renderer.setViewChangeListener(updateZoomButton);
 
@@ -53,7 +62,6 @@ new AssetController({
   renderer,
   sendEvent: sendLocalEvent,
   selection,
-  onInserted: () => activateTool("select"),
   onStatus: showToast,
 });
 
@@ -62,12 +70,15 @@ bindRemoteFollowInteractionGuards(canvas, remoteFollow);
 realtime = new RealtimeClient({
   boardId,
   clientId,
+  profile: participantProfile,
   onSnapshot: (board, pendingEvents) => {
     state.applySnapshot(board);
     for (const pending of pendingEvents) state.applyEvent(pending, null, clientId);
     selection.clear();
     remoteFollow.seedLastFromStrokes(state.listStrokes());
+    renderer.invalidateBase();
     renderer.render();
+    updateBackgroundUi();
     updateGoToLastButton();
   },
   onEvent: (event, revision, actorId) => {
@@ -75,6 +86,10 @@ realtime = new RealtimeClient({
     remoteFollow.observe(event, actorId);
     if (["stroke.delete", "object.delete", "board.clear"].includes(event.type)) {
       selection.setSelection(selection.keys());
+    }
+    if (event.type === "board.background") {
+      renderer.invalidateBase();
+      updateBackgroundUi();
     }
     renderer.requestRender();
     updateGoToLastButton();
@@ -93,6 +108,7 @@ updateGoToLastButton();
 updateCameraButtons();
 updateDirectInkButton();
 updateZoomButton(renderer.view);
+updateBackgroundUi();
 
 window.addEventListener("beforeunload", () => realtime.close());
 document.addEventListener("visibilitychange", () => {
@@ -112,7 +128,10 @@ function bindToolbar() {
   });
 
   bindColorPicker();
+  bindBackgroundPicker();
   bindMorePopover();
+  bindPresencePopover();
+  bindSharePopover();
 
   const widthInput = document.getElementById("width");
   const widthLabel = document.getElementById("widthLabel");
@@ -150,7 +169,11 @@ function bindToolbar() {
     closePopover("morePopover", "moreTrigger");
     clearBoard();
   });
-  document.getElementById("shareRoom").addEventListener("click", copyRoomLink);
+  document.getElementById("profileButton").addEventListener("click", async () => {
+    await editParticipantProfile(participantProfile);
+    history.replaceState(null, "", location.pathname);
+    location.reload();
+  });
 }
 
 function activateTool(tool) {
@@ -203,7 +226,7 @@ function bindColorPicker() {
   document.querySelector(".toolbar")?.addEventListener("scroll", close, { passive: true });
 
   function open() {
-    closePopover("morePopover", "moreTrigger");
+    closeBottomPopovers("colorPopover");
     popover.classList.remove("hidden");
     trigger.setAttribute("aria-expanded", "true");
     positionPopover(trigger, popover);
@@ -225,13 +248,65 @@ function bindColorPicker() {
   }
 }
 
+function bindBackgroundPicker() {
+  const trigger = document.getElementById("backgroundTrigger");
+  const popover = document.getElementById("backgroundPopover");
+  const patternButtons = [...popover.querySelectorAll("[data-background-pattern]")];
+  const toneButtons = [...popover.querySelectorAll("[data-background-tone]")];
+
+  trigger.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const opening = popover.classList.contains("hidden");
+    closeBottomPopovers("backgroundPopover");
+    popover.classList.toggle("hidden", !opening);
+    trigger.setAttribute("aria-expanded", String(opening));
+    if (opening) {
+      updateBackgroundUi();
+      positionPopover(trigger, popover);
+    }
+  });
+
+  patternButtons.forEach((button) => button.addEventListener("click", () => {
+    setBoardBackground({ ...state.background, pattern: button.dataset.backgroundPattern });
+  }));
+  toneButtons.forEach((button) => button.addEventListener("click", () => {
+    setBoardBackground({ ...state.background, tone: button.dataset.backgroundTone });
+  }));
+
+  bindOutsideClose(trigger, popover, () => closePopover("backgroundPopover", "backgroundTrigger"));
+  window.addEventListener("resize", () => {
+    if (!popover.classList.contains("hidden")) positionPopover(trigger, popover);
+  });
+}
+
+function setBoardBackground(raw) {
+  const background = normalizeBackground(raw);
+  if (background.pattern === state.background.pattern && background.tone === state.background.tone) return;
+  const event = { type: "board.background", op_id: createId(), background };
+  state.applyEvent(event, null, clientId);
+  sendLocalEvent(event, { recordHistory: false });
+  renderer.invalidateBase();
+  renderer.requestRender();
+  updateBackgroundUi();
+}
+
+function updateBackgroundUi() {
+  const background = normalizeBackground(state.background);
+  for (const item of BACKGROUND_PATTERNS) {
+    document.querySelector(`[data-background-pattern="${item.id}"]`)?.classList.toggle("active", item.id === background.pattern);
+  }
+  for (const item of BACKGROUND_TONES) {
+    document.querySelector(`[data-background-tone="${item.id}"]`)?.classList.toggle("active", item.id === background.tone);
+  }
+}
+
 function bindMorePopover() {
   const trigger = document.getElementById("moreTrigger");
   const popover = document.getElementById("morePopover");
   trigger.addEventListener("click", (event) => {
     event.stopPropagation();
     const opening = popover.classList.contains("hidden");
-    closePopover("colorPopover", "colorTrigger");
+    closeBottomPopovers("morePopover");
     popover.classList.toggle("hidden", !opening);
     trigger.setAttribute("aria-expanded", String(opening));
     if (opening) positionPopover(trigger, popover);
@@ -240,6 +315,43 @@ function bindMorePopover() {
   window.addEventListener("resize", () => {
     if (!popover.classList.contains("hidden")) positionPopover(trigger, popover);
   });
+}
+
+function bindPresencePopover() {
+  const trigger = document.getElementById("presenceTrigger");
+  const popover = document.getElementById("presencePopover");
+  trigger.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const opening = popover.classList.contains("hidden");
+    closeTopPopovers("presencePopover");
+    popover.classList.toggle("hidden", !opening);
+    trigger.setAttribute("aria-expanded", String(opening));
+    if (opening) renderRoster(latestRoster);
+  });
+  bindOutsideClose(trigger, popover, () => closeTopPopover("presencePopover", "presenceTrigger"));
+}
+
+function bindSharePopover() {
+  const trigger = document.getElementById("shareRoom");
+  const popover = document.getElementById("sharePopover");
+  trigger.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const opening = popover.classList.contains("hidden");
+    closeTopPopovers("sharePopover");
+    popover.classList.toggle("hidden", !opening);
+    trigger.setAttribute("aria-expanded", String(opening));
+  });
+  document.getElementById("copyStudentLink").addEventListener("click", async () => {
+    const copied = await copyText(shareUrlForRole(boardId, "student"));
+    showToast(copied ? "Ссылка ученику скопирована" : "Не удалось скопировать", copied ? "success" : "error");
+    closeTopPopover("sharePopover", "shareRoom");
+  });
+  document.getElementById("copyTeacherLink").addEventListener("click", async () => {
+    const copied = await copyText(shareUrlForRole(boardId, "teacher", participantProfile.name));
+    showToast(copied ? "Ссылка преподавателя скопирована" : "Не удалось скопировать", copied ? "success" : "error");
+    closeTopPopover("sharePopover", "shareRoom");
+  });
+  bindOutsideClose(trigger, popover, () => closeTopPopover("sharePopover", "shareRoom"));
 }
 
 function bindOutsideClose(trigger, popover, close) {
@@ -251,12 +363,28 @@ function bindOutsideClose(trigger, popover, close) {
   document.addEventListener("keydown", (event) => { if (event.key === "Escape") close(); });
 }
 
-function closePopover(popoverId, triggerId) {
-  const popover = document.getElementById(popoverId);
-  const trigger = document.getElementById(triggerId);
-  popover?.classList.add("hidden");
-  trigger?.setAttribute("aria-expanded", "false");
+function closeBottomPopovers(exceptId = "") {
+  for (const [popoverId, triggerId] of [
+    ["colorPopover", "colorTrigger"],
+    ["backgroundPopover", "backgroundTrigger"],
+    ["morePopover", "moreTrigger"],
+  ]) {
+    if (popoverId !== exceptId) closePopover(popoverId, triggerId);
+  }
 }
+
+function closeTopPopovers(exceptId = "") {
+  for (const [popoverId, triggerId] of [["presencePopover", "presenceTrigger"], ["sharePopover", "shareRoom"]]) {
+    if (popoverId !== exceptId) closeTopPopover(popoverId, triggerId);
+  }
+}
+
+function closePopover(popoverId, triggerId) {
+  document.getElementById(popoverId)?.classList.add("hidden");
+  document.getElementById(triggerId)?.setAttribute("aria-expanded", "false");
+}
+
+function closeTopPopover(popoverId, triggerId) { closePopover(popoverId, triggerId); }
 
 function positionPopover(trigger, popover) {
   const stageRect = stage.getBoundingClientRect();
@@ -295,15 +423,6 @@ function clearBoard() {
   updateGoToLastButton();
 }
 
-async function copyRoomLink() {
-  const button = document.getElementById("shareRoom");
-  const roomUrl = `${location.origin}/b/${encodeURIComponent(boardId)}`;
-  const copied = await copyText(roomUrl);
-  const previous = button.textContent;
-  button.textContent = copied ? "Ссылка скопирована" : "Не скопировалось";
-  setTimeout(() => { button.textContent = previous; }, 1600);
-}
-
 async function copyText(text) {
   try {
     if (navigator.clipboard?.writeText) {
@@ -332,6 +451,41 @@ function showToast(message, tone = "") {
   if (tone !== "busy") toastTimer = setTimeout(() => toast.classList.add("hidden"), 1800);
 }
 
+function renderSelfProfile() {
+  const role = document.getElementById("selfRole");
+  const name = document.getElementById("selfName");
+  role.textContent = roleLabel(participantProfile.role);
+  role.className = `role-badge ${participantProfile.role}`;
+  name.textContent = participantProfile.name;
+  document.getElementById("profileButton").title = `${roleLabel(participantProfile.role)} · ${participantProfile.name} · ${participantProfile.device}`;
+}
+
+function updatePresence(count, roster = []) {
+  latestRoster = Array.isArray(roster) ? roster : [];
+  document.getElementById("participants").textContent = count === 1 ? "1 участник" : `${count} участников`;
+  if (!document.getElementById("presencePopover").classList.contains("hidden")) renderRoster(latestRoster);
+}
+
+function renderRoster(roster) {
+  const popover = document.getElementById("presencePopover");
+  const groups = [
+    ["teacher", "Преподаватели"],
+    ["student", "Ученики"],
+  ];
+  const html = groups.map(([role, title]) => {
+    const people = roster.filter((item) => item.role === role);
+    if (!people.length) return "";
+    return `<section class="roster-section"><div class="roster-heading">${title}</div>${people.map((person) => {
+      const self = person.client_id === clientId;
+      return `<div class="roster-person ${role} ${self ? "self" : ""}">
+        <span class="roster-avatar">${escapeHtml(initials(person.name))}</span>
+        <div><strong>${escapeHtml(person.name)}${self ? " · вы" : ""}</strong><span>${escapeHtml(person.device || "Устройство")}</span></div>
+      </div>`;
+    }).join("")}</section>`;
+  }).join("");
+  popover.innerHTML = html || '<div class="roster-person"><div><strong>Пока никого</strong></div></div>';
+}
+
 function updateUndoButtons() {
   document.getElementById("undo").disabled = !history.canUndo();
   document.getElementById("redo").disabled = !history.canRedo();
@@ -357,7 +511,6 @@ function updateDirectInkButton() {
     ? "Рисование мышью и пальцем включено"
     : "Разрешить рисование мышью и пальцем";
 }
-function updatePresence(count) { document.getElementById("participants").textContent = count === 1 ? "1 участник" : `${count} участников`; }
 function updateConnection(status) {
   const dot = document.getElementById("connectionDot");
   const text = document.getElementById("connectionText");
@@ -434,6 +587,17 @@ function loadDirectInkEnabled() {
 }
 function saveDirectInkEnabled(enabled) {
   try { localStorage.setItem("local-board:direct-ink", enabled ? "1" : "0"); } catch (_) {}
+}
+function initials(name) {
+  return String(name || "?").trim().split(/\s+/).slice(0, 2).map((part) => part[0] || "").join("").toUpperCase() || "?";
+}
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
 function isHexColor(value) { return typeof value === "string" && /^#[0-9a-fA-F]{6}$/.test(value); }
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
