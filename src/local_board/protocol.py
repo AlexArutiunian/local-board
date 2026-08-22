@@ -10,12 +10,18 @@ MAX_POINTS_PER_STROKE = 20_000
 MAX_WIDTH = 64.0
 MIN_SOURCE_ZOOM = 0.2
 MAX_SOURCE_ZOOM = 5.0
+MAX_OBJECT_DIMENSION = 20_000.0
+MAX_TRANSLATION = 100_000.0
 MUTATION_TYPES = {
     "stroke.begin",
     "stroke.append",
     "stroke.end",
     "stroke.delete",
     "stroke.restore",
+    "stroke.translate",
+    "object.create",
+    "object.update",
+    "object.delete",
     "board.clear",
 }
 
@@ -77,15 +83,52 @@ def normalize_stroke(payload: Any, *, max_points: int = MAX_POINTS_PER_BATCH) ->
         "pointer_type": pointer_type,
         "points": normalize_points(payload.get("points"), max_points=max_points),
     }
-
-    # Optional viewport metadata is descriptive, never authorization/state.
-    # It lets another client show the same handwriting at approximately the
-    # same visual scale as the device where the stroke was created.
     if payload.get("source_zoom") is not None:
         source_zoom = _number(payload.get("source_zoom"), "stroke.source_zoom")
         stroke["source_zoom"] = min(MAX_SOURCE_ZOOM, max(MIN_SOURCE_ZOOM, source_zoom))
-
     return stroke
+
+
+def normalize_board_object(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ProtocolError("invalid object")
+    kind = str(payload.get("kind", "image"))
+    if kind != "image":
+        raise ProtocolError("unsupported object kind")
+    width = _number(payload.get("width"), "object.width")
+    height = _number(payload.get("height"), "object.height")
+    if not 1 <= width <= MAX_OBJECT_DIMENSION or not 1 <= height <= MAX_OBJECT_DIMENSION:
+        raise ProtocolError("invalid object dimensions")
+    src = _nonempty_string(payload.get("src"), "object.src", max_length=512)
+    if not src.startswith("/api/boards/"):
+        raise ProtocolError("invalid object src")
+    name = str(payload.get("name", "image"))[:160] or "image"
+    return {
+        "id": _nonempty_string(payload.get("id"), "object.id"),
+        "kind": kind,
+        "x": _number(payload.get("x"), "object.x"),
+        "y": _number(payload.get("y"), "object.y"),
+        "width": width,
+        "height": height,
+        "src": src,
+        "name": name,
+    }
+
+
+def normalize_object_patch(payload: Any) -> dict[str, float]:
+    if not isinstance(payload, dict):
+        raise ProtocolError("invalid object patch")
+    patch: dict[str, float] = {}
+    for field in ("x", "y", "width", "height"):
+        if field not in payload:
+            continue
+        value = _number(payload[field], f"object.{field}")
+        if field in {"width", "height"} and not 1 <= value <= MAX_OBJECT_DIMENSION:
+            raise ProtocolError("invalid object dimensions")
+        patch[field] = value
+    if not patch:
+        raise ProtocolError("empty object patch")
+    return patch
 
 
 def normalize_client_event(payload: Any) -> dict[str, Any]:
@@ -106,13 +149,26 @@ def normalize_client_event(payload: Any) -> dict[str, Any]:
     if message_type == "stroke.begin":
         event["stroke"] = normalize_stroke(payload.get("stroke"))
     elif message_type == "stroke.restore":
-        event["stroke"] = normalize_stroke(
-            payload.get("stroke"), max_points=MAX_POINTS_PER_STROKE
-        )
+        event["stroke"] = normalize_stroke(payload.get("stroke"), max_points=MAX_POINTS_PER_STROKE)
     elif message_type == "stroke.append":
         event["stroke_id"] = _nonempty_string(payload.get("stroke_id"), "stroke_id")
         event["points"] = normalize_points(payload.get("points"))
     elif message_type in {"stroke.end", "stroke.delete"}:
         event["stroke_id"] = _nonempty_string(payload.get("stroke_id"), "stroke_id")
+    elif message_type == "stroke.translate":
+        event["stroke_id"] = _nonempty_string(payload.get("stroke_id"), "stroke_id")
+        dx = _number(payload.get("dx"), "dx")
+        dy = _number(payload.get("dy"), "dy")
+        if abs(dx) > MAX_TRANSLATION or abs(dy) > MAX_TRANSLATION:
+            raise ProtocolError("translation too large")
+        event["dx"] = dx
+        event["dy"] = dy
+    elif message_type == "object.create":
+        event["object"] = normalize_board_object(payload.get("object"))
+    elif message_type == "object.update":
+        event["object_id"] = _nonempty_string(payload.get("object_id"), "object_id")
+        event["patch"] = normalize_object_patch(payload.get("patch"))
+    elif message_type == "object.delete":
+        event["object_id"] = _nonempty_string(payload.get("object_id"), "object_id")
 
     return event
