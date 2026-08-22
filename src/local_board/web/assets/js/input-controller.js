@@ -1,5 +1,5 @@
 import { createId } from "./id.js";
-import { PencilEngine } from "./pencil-engine.js";
+import { PencilEngine, isContactEvent } from "./pencil-engine.js";
 
 export class InputController {
   constructor({ canvas, state, renderer, sendEvent, clientId, onStrokeFinished }) {
@@ -29,16 +29,19 @@ export class InputController {
     this.pinchAnchor = null;
     this.erasedThisGesture = new Set();
 
+    // Safari fallback path. Pointer Events remain primary, but WebKit has had
+    // regressions where a fast second pointerdown is omitted. Touch.touchType
+    // lets iPad Safari identify Apple Pencil independently of finger touches.
+    this.pendingStylusTouch = null;
+    this.stylusFallbackTimer = null;
+
     this.bind();
   }
 
   bind() {
     this.canvas.addEventListener("pointerdown", (event) => this.onPointerDown(event), { passive: false });
 
-    // Continue an already-started contact at window level. We deliberately avoid
-    // explicit setPointerCapture/releasePointerCapture for Pencil: direct-manipulation
-    // pointers have implicit capture semantics, while WebKit has historically had
-    // edge cases around explicit capture transitions during rapid contacts.
+    // Window-level terminal listeners make cleanup independent of event target.
     window.addEventListener("pointermove", (event) => this.onPointerMove(event), {
       capture: true,
       passive: false,
@@ -48,6 +51,24 @@ export class InputController {
       passive: false,
     });
     window.addEventListener("pointercancel", (event) => this.onPointerEnd(event), {
+      capture: true,
+      passive: false,
+    });
+
+    // Secondary Apple Pencil signal on Safari. It is used only if Pointer Events
+    // failed to establish/finish a stylus contact, so normal input is not doubled.
+    this.canvas.addEventListener("touchstart", (event) => this.onStylusTouchStart(event), {
+      passive: false,
+    });
+    window.addEventListener("touchmove", (event) => this.onStylusTouchMove(event), {
+      capture: true,
+      passive: false,
+    });
+    window.addEventListener("touchend", (event) => this.onStylusTouchEnd(event), {
+      capture: true,
+      passive: false,
+    });
+    window.addEventListener("touchcancel", (event) => this.onStylusTouchEnd(event), {
       capture: true,
       passive: false,
     });
@@ -80,8 +101,7 @@ export class InputController {
     this.clearBrowserSelection();
 
     if (event.pointerType === "pen") {
-      // A fresh Pencil contact is authoritative. Any stale prior stylus state is
-      // closed immediately rather than forcing the user to wait/retry the next letter.
+      this.cancelStylusFallback();
       this.cancelTouchGesture();
       this.endMousePan();
       this.finishNonInkStylus();
@@ -90,11 +110,7 @@ export class InputController {
         this.pencil.begin(event, { color: this.color, width: this.width });
       } else {
         this.pencil.interrupt();
-        this.stylusPointerId = event.pointerId;
-        this.stylusMode = this.tool;
-        this.erasedThisGesture.clear();
-        if (this.stylusMode === "eraser") this.eraseAt(event.clientX, event.clientY);
-        else this.panAnchor = { x: event.clientX, y: event.clientY };
+        this.startNonInkStylus(event.pointerId, this.tool, event.clientX, event.clientY);
       }
       return;
     }
@@ -106,7 +122,7 @@ export class InputController {
       return;
     }
 
-    // Mouse/trackpad are navigation-only and never create ink.
+    // Mouse/trackpad are navigation-only.
     if (this.isStylusActive()) return;
     if (event.button !== undefined && event.button !== 0) return;
     this.mousePointerId = event.pointerId;
@@ -114,15 +130,35 @@ export class InputController {
   }
 
   onPointerMove(event) {
+    // Existing Pencil session: pointerId, not later pointerType metadata, is authoritative.
     if (this.pencil.ownsPointer(event.pointerId)) {
       preventDefault(event);
       this.pencil.move(event);
       return;
     }
 
+    // Critical WebKit recovery: a fast second contact can arrive as a pen move with
+    // pressure/buttons even when pointerdown was omitted. Treat contact state itself
+    // as sufficient evidence to begin a new stroke immediately.
+    if (event.pointerType === "pen" && isContactEvent(event)) {
+      preventDefault(event);
+      this.cancelStylusFallback();
+      this.cancelTouchGesture();
+      this.endMousePan();
+      this.finishNonInkStylus();
+
+      if (this.tool === "pen") {
+        this.pencil.recover(event, { color: this.color, width: this.width });
+      } else {
+        this.pencil.interrupt();
+        this.startNonInkStylus(event.pointerId, this.tool, event.clientX, event.clientY);
+      }
+      return;
+    }
+
     if (this.stylusPointerId === event.pointerId) {
       preventDefault(event);
-      if (event.buttons === 0 && Number(event.pressure || 0) === 0) {
+      if (!isContactEvent(event)) {
         this.finishNonInkStylus();
         return;
       }
@@ -146,8 +182,6 @@ export class InputController {
   }
 
   onPointerEnd(event) {
-    // Pointer identity wins over the pointerType reported on the terminal event.
-    // This makes cleanup robust even if WebKit metadata is odd during rapid lifts.
     if (this.pencil.ownsPointer(event.pointerId)) {
       preventDefault(event);
       this.pencil.end(event.pointerId);
@@ -175,6 +209,104 @@ export class InputController {
       this.endMousePan();
       this.renderer.saveView();
     }
+  }
+
+  onStylusTouchStart(event) {
+    const touch = findStylusTouch(event.changedTouches);
+    if (!touch) return;
+    preventDefault(event);
+
+    // Usually pointerdown will handle this contact. Give it the current task first;
+    // if WebKit omits pointerdown, start from Touch Events on the next macrotask.
+    this.pendingStylusTouch = snapshotTouch(touch);
+    this.cancelStylusFallbackTimer();
+    this.stylusFallbackTimer = setTimeout(() => {
+      this.stylusFallbackTimer = null;
+      const pending = this.pendingStylusTouch;
+      if (!pending || this.isStylusActive()) return;
+      this.beginStylusTouchFallback(pending);
+    }, 0);
+  }
+
+  onStylusTouchMove(event) {
+    const touch = findStylusTouch(event.changedTouches) || findStylusTouch(event.touches);
+    if (!touch) return;
+    preventDefault(event);
+
+    const adapted = touchToPointerLike(touch);
+    const key = adapted.pointerId;
+
+    // Pointer Events already own this Pencil contact: ignore the duplicate TouchEvent.
+    if (this.pencil.isActive() && !this.pencil.ownsPointer(key)) return;
+    if (this.stylusPointerId !== null && this.stylusPointerId !== key) return;
+
+    this.cancelStylusFallbackTimer();
+    this.pendingStylusTouch = snapshotTouch(touch);
+
+    if (this.pencil.ownsPointer(key)) {
+      this.pencil.move(adapted);
+      return;
+    }
+
+    if (this.stylusPointerId === key) {
+      if (this.stylusMode === "eraser") this.eraseAt(touch.clientX, touch.clientY);
+      else if (this.stylusMode === "pan") this.movePan(touch.clientX, touch.clientY);
+      return;
+    }
+
+    // No PointerEvent contact exists at all: reconstruct from stylus touchmove.
+    this.beginStylusTouchFallback(this.pendingStylusTouch);
+  }
+
+  onStylusTouchEnd(event) {
+    const touch = findStylusTouch(event.changedTouches);
+    if (!touch) return;
+    preventDefault(event);
+
+    this.cancelStylusFallbackTimer();
+    this.pendingStylusTouch = null;
+    const key = touchKey(touch.identifier);
+
+    if (this.pencil.ownsPointer(key)) {
+      this.pencil.end(key);
+      return;
+    }
+    if (this.stylusPointerId === key) {
+      const shouldSaveView = this.stylusMode === "pan";
+      this.finishNonInkStylus();
+      if (shouldSaveView) this.renderer.saveView();
+      return;
+    }
+
+    // Secondary terminal signal: if WebKit lost pointerup, stylus touchend still
+    // releases any pointer-based Pencil session so the next contact cannot be blocked.
+    if (this.pencil.isActive()) this.pencil.interrupt();
+  }
+
+  beginStylusTouchFallback(touchSnapshot) {
+    if (!touchSnapshot || this.isStylusActive()) return;
+    this.cancelTouchGesture();
+    this.endMousePan();
+    const adapted = touchToPointerLike(touchSnapshot);
+
+    if (this.tool === "pen") {
+      this.pencil.recover(adapted, { color: this.color, width: this.width });
+    } else {
+      this.startNonInkStylus(
+        adapted.pointerId,
+        this.tool,
+        adapted.clientX,
+        adapted.clientY,
+      );
+    }
+  }
+
+  startNonInkStylus(pointerId, mode, clientX, clientY) {
+    this.stylusPointerId = pointerId;
+    this.stylusMode = mode;
+    this.erasedThisGesture.clear();
+    if (mode === "eraser") this.eraseAt(clientX, clientY);
+    else this.panAnchor = { x: clientX, y: clientY };
   }
 
   isStylusActive() {
@@ -251,11 +383,23 @@ export class InputController {
     if (this.touchPointers.size) this.startTouchGesture();
   }
 
+  cancelStylusFallbackTimer() {
+    if (this.stylusFallbackTimer === null) return;
+    clearTimeout(this.stylusFallbackTimer);
+    this.stylusFallbackTimer = null;
+  }
+
+  cancelStylusFallback() {
+    this.cancelStylusFallbackTimer();
+    this.pendingStylusTouch = null;
+  }
+
   interruptInput() {
     const hadNavigation = this.touchPointers.size > 0
       || this.mousePointerId !== null
       || (this.stylusPointerId !== null && this.stylusMode === "pan");
 
+    this.cancelStylusFallback();
     this.pencil.interrupt();
     this.finishNonInkStylus();
     this.touchPointers.clear();
@@ -303,6 +447,40 @@ export class InputController {
 
 function preventDefault(event) {
   if (event.cancelable) event.preventDefault();
+}
+
+function findStylusTouch(touchList) {
+  if (!touchList) return null;
+  for (const touch of Array.from(touchList)) {
+    if (touch.touchType === "stylus") return touch;
+  }
+  return null;
+}
+
+function snapshotTouch(touch) {
+  return {
+    identifier: touch.identifier,
+    clientX: touch.clientX,
+    clientY: touch.clientY,
+    force: Number(touch.force || 0.45),
+    touchType: "stylus",
+  };
+}
+
+function touchToPointerLike(touch) {
+  return {
+    pointerId: touchKey(touch.identifier),
+    pointerType: "pen",
+    clientX: touch.clientX,
+    clientY: touch.clientY,
+    pressure: Number(touch.force || 0.45),
+    force: Number(touch.force || 0.45),
+    buttons: 1,
+  };
+}
+
+function touchKey(identifier) {
+  return `stylus-touch:${identifier}`;
 }
 
 function findClosestStroke(strokes, point, radius, ignored) {
