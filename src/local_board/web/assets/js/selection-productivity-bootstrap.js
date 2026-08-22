@@ -3,14 +3,15 @@ import { InputController } from "./input-controller.js";
 import { installSelectionProductivity } from "./selection-productivity.js";
 
 // Keep Select semantics modular and attach them to the concrete InputController
-// instance after its normal listeners are installed. Module is loaded before
-// app.js from index.html, so the constructor used by the app is already patched.
+// instance after its normal listeners are installed. pen-ui-controls imports this
+// module before app.js constructs InputController, so the prototype is patched in time.
 if (!InputController.prototype.__selectionProductivityBootstrap) {
   const originalBind = InputController.prototype.bind;
   InputController.prototype.bind = function bindWithSelectionProductivity() {
     originalBind.call(this);
     if (!this.selection || this.selection.__selectionProductivityInstalled) return;
     this.selection.__selectionProductivityInstalled = true;
+    const history = globalThis.__localBoardHistory || null;
 
     installSelectionProductivity({
       selection: this.selection,
@@ -18,6 +19,7 @@ if (!InputController.prototype.__selectionProductivityBootstrap) {
       state: this.state,
       renderer: this.renderer,
       sendEvent: this.sendEvent,
+      history,
       showToast: showBoardToast,
     });
 
