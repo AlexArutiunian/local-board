@@ -6,8 +6,19 @@
 
 * { box-sizing: border-box; }
 html, body, #app { width: 100%; height: 100%; margin: 0; overflow: hidden; }
-body { overscroll-behavior: none; }
+body {
+  overscroll-behavior: none;
+  -webkit-text-size-adjust: 100%;
+}
 button, input { font: inherit; }
+
+/* The board UI is an interaction surface, not selectable document text. This is
+   especially important on iPad where Pencil gestures can otherwise trigger Safari selection. */
+#app, #stage, #board, .topbar, .toolbar, .offline-banner {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
 
 #app { display: flex; flex-direction: column; background: #f5f5f4; }
 .topbar {
@@ -36,8 +47,22 @@ button, input { font: inherit; }
 .separator { color: #d6d3d1; }
 .share-room { min-width: auto; height: 36px; padding: 0 12px; font-size: 12px; }
 
-#stage { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; background: #fafaf9; }
-#board { width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; }
+#stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  background: #fafaf9;
+  touch-action: none;
+}
+#board {
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+  cursor: crosshair;
+  -webkit-tap-highlight-color: transparent;
+}
 
 .toolbar {
   position: absolute;
@@ -74,6 +99,7 @@ button {
   font-weight: 650;
   cursor: pointer;
   touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 button:active { transform: scale(.97); }
 button.active { border-color: #1c1917; background: #1c1917; color: white; }
