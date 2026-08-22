@@ -160,8 +160,10 @@ export function installSelectionInteractionV2({
     selection.finishGestureState();
     session = null;
     renderer.requestRender();
-    syncAreaBar();
+    // Let the legacy group toolbar update first; area toolbar is authoritative
+    // and hides it last when a first-class area is active.
     productivity?.sync?.();
+    syncAreaBar();
     return true;
   };
 
@@ -169,14 +171,15 @@ export function installSelectionInteractionV2({
   selection.cancelPointer = () => {
     session = null;
     const result = baseCancelPointer();
+    productivity?.sync?.();
     syncAreaBar();
     return result;
   };
 
   selection.clearAreaSelection = () => {
     clearAreaVisual();
-    syncAreaBar();
     productivity?.sync?.();
+    syncAreaBar();
   };
 
   return {
@@ -185,6 +188,7 @@ export function installSelectionInteractionV2({
   };
 
   function commitClick() {
+    if (session?.forceMarquee) return;
     clearAreaVisual();
     const hit = session?.hit || null;
     if (session?.additive) {
@@ -223,7 +227,7 @@ export function installSelectionInteractionV2({
     const keys = [...new Set([...previous, ...hits])];
 
     // Preserve the rectangle independently from how many board items hit-test
-    // found. AI actions work on this exact area, not on a guessed stroke list.
+    // found. Area actions and AI are anchored to this rectangle itself.
     baseSetSelection(keys);
     areaBounds = { ...rect };
     selection.areaBounds = { ...rect };
@@ -232,6 +236,7 @@ export function installSelectionInteractionV2({
     // baseSetSelection notified listeners before areaBounds existed; notify once
     // more now so area-aware UI can appear in the same pointerup turn.
     selection.onSelectionChange?.(selection.keys());
+    productivity?.sync?.();
     syncAreaBar();
     showToast?.(keys.length ? `Выделена область: ${keys.length}` : "Выделена область");
   }
@@ -275,6 +280,7 @@ export function installSelectionInteractionV2({
       else if (action === "duplicate") productivity?.duplicate?.();
       else if (action === "delete") selection.deleteSelected();
       else if (action === "done") selection.clear();
+      productivity?.sync?.();
       syncAreaBar();
     });
     return bar;
@@ -285,12 +291,8 @@ export function installSelectionInteractionV2({
     const show = Boolean(areaBounds) && !selection.isCropping();
     areaBar.classList.toggle("hidden", !show);
 
-    // Area owns the contextual UI. Hide object/group bars that may have been
-    // shown by baseSetSelection before areaBounds was committed.
-    if (show) {
-      selection.contextBar?.classList.add("hidden");
-      document.querySelector(".selection-context-bar")?.classList.add("hidden");
-    }
+    // Area owns contextual UI. Object/group bars must never cover it.
+    if (show) hideLegacyContextBars();
 
     if (!show) {
       stopPositionLoop();
@@ -308,8 +310,14 @@ export function installSelectionInteractionV2({
     startPositionLoop();
   }
 
+  function hideLegacyContextBars() {
+    selection.contextBar?.classList.add("hidden");
+    document.querySelector(".selection-context-bar")?.classList.add("hidden");
+  }
+
   function positionAreaBar() {
     if (!areaBar || !areaBounds || areaBar.classList.contains("hidden")) return;
+    hideLegacyContextBars();
     const stage = selection.canvas.parentElement;
     if (!stage) return;
     const stageRect = stage.getBoundingClientRect();
