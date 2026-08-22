@@ -1,6 +1,40 @@
 import pytest
 
-from local_board.protocol import ProtocolError, normalize_client_event
+from local_board.protocol import (
+    ProtocolError,
+    normalize_client_event,
+    normalize_participant_profile,
+)
+
+
+def test_normalizes_participant_profile():
+    assert normalize_participant_profile(" Александр ", "teacher", "iPad") == {
+        "name": "Александр",
+        "role": "teacher",
+        "device": "iPad",
+    }
+    with pytest.raises(ProtocolError):
+        normalize_participant_profile("Ученик", "admin", "Компьютер")
+
+
+def test_normalizes_shared_background():
+    event = normalize_client_event(
+        {
+            "type": "board.background",
+            "op_id": "paper-1",
+            "background": {"pattern": "fine-grid", "tone": "warm"},
+        }
+    )
+    assert event["background"] == {"pattern": "fine-grid", "tone": "warm"}
+
+    with pytest.raises(ProtocolError):
+        normalize_client_event(
+            {
+                "type": "board.background",
+                "op_id": "paper-bad",
+                "background": {"pattern": "music", "tone": "white"},
+            }
+        )
 
 
 def test_normalizes_stroke_begin():
