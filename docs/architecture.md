@@ -2,205 +2,224 @@
 
 ## Goal
 
-`local-board` — room-based realtime-доска для совместных занятий и работы. Один участник создаёт доску, делится ссылкой или 4-значным кодом, и все участники видят общий canvas в realtime.
-
-Текущий deployment — один Linux-хост в LAN. Frontend остаётся **host-agnostic**: same-origin HTTP/WebSocket работает одинаково на `localhost`, LAN-IP и будущем HTTPS-домене.
-
-Главный flow:
+`local-board` — room-based realtime-доска для занятий. Один Linux-процесс обслуживает несколько браузеров; локальный input отображается оптимистично, shared mutations валидируются сервером, затем broadcast'ятся остальным участникам и сохраняются.
 
 ```text
-Dashboard / → explicit room
-→ participants join /b/<code>
-→ local optimistic ink/object interaction
-→ validated realtime mutation
+Dashboard / → room /b/<code>
+→ local ink/object action
+→ validated WebSocket mutation
 → authoritative BoardRoom
-→ event to peers
-→ durable JSON snapshot + separate image assets
+→ broadcast to peers
+→ JSON snapshot + separate image assets
 ```
 
-## Components
+Frontend host-agnostic: same-origin HTTP/WebSocket работает на localhost, LAN и через HTTPS/WSS tunnel/reverse proxy.
 
-```mermaid
-flowchart LR
-    D[Board dashboard] -->|GET/POST /api/rooms| A[FastAPI]
-    A --> RS[RoomService]
-    A --> AS[Asset endpoints]
-    RS --> J[(Board JSON)]
-    AS --> F[(Image assets)]
+## Room lifecycle
 
-    I[iPad / Pencil] <-->|WebSocket| R[BoardRoom]
-    L[Laptop browser] <-->|WebSocket| R
-    O[Other participant] <-->|WebSocket| R
-    R --> J
+1. `POST /api/rooms` создаёт свободный код `0000..9999`.
+2. Пустая доска сохраняется сразу.
+3. `GET /api/rooms` используется dashboard'ом.
+4. Dashboard — преподавательский workflow и открывает комнаты с `role=teacher`.
+5. `/b/<code>` и `/ws/<code>` существуют только для сохранённых комнат.
+
+4-значный код — UX, **не авторизация**.
+
+## Participant identity and presence
+
+Каждое WebSocket-подключение передаёт validated connection profile:
+
+```text
+name
+role: teacher | student
+device: iPad | Компьютер | ...
 ```
 
-## Room/dashboard lifecycle
+`BoardRoom.client_profiles` — ephemeral connection state и не сохраняется в board JSON. Presence payload содержит `roster[]`, поэтому UI может отдельно показать преподавателей/учеников и устройство каждого подключения.
 
-1. `POST /api/rooms` allocates a free code `0000..9999`.
-2. Empty room state is persisted immediately.
-3. `GET /api/rooms` lists persisted boards by last modified time for the dashboard.
-4. `/b/<code>` and `/ws/<code>` exist only for known rooms.
+Преподаватель может открыть одну комнату с ноутбука и iPad: teacher invite переносит то же имя/роль, а device определяется каждым браузером самостоятельно. Это остаются два WebSocket clients, поэтому realtime input и reconnect независимы.
 
-The 4-digit code is classroom UX, **not authorization**. Public deployment needs a separate invite/owner credential.
+**Критическая граница:** текущая роль — только identity/UX. Она client-supplied и не должна использоваться как security permission. Публичный teacher-only доступ потребует server-issued owner/invite credential, отдельного от `role` и room code.
 
 ## Shared board model
 
-The room has two persistent content types:
+Persisted board snapshot:
 
 ```text
-strokes[]  # freehand ink
-objects[]  # positioned board objects; currently image
+revision
+background
+strokes[]
+objects[]
 ```
 
-Images are deliberately **not base64-embedded in board JSON/WebSocket events**. The browser uploads bytes to:
+`background`:
+
+```json
+{"pattern":"dots","tone":"white"}
+```
+
+Allowed patterns:
+
+```text
+plain | dots | grid | fine-grid | ruled | cornell | isometric
+```
+
+Allowed tones:
+
+```text
+white | warm | gray | blue | green
+```
+
+Background is **shared board state**: `board.background` is validated, broadcast and persisted. It is not a local viewport preference.
+
+### Ink
+
+A stroke stores freehand points plus style and optional descriptive `source_zoom`. `source_zoom` helps a viewer's local auto-scale but is not shared camera state.
+
+### Images
+
+Images are not embedded as base64 in JSON/WebSocket messages. Browser uploads bytes to:
 
 ```text
 POST /api/boards/<room>/assets
 ```
 
-and the shared object contains only same-room metadata:
+and shared state stores only:
 
 ```text
-{
-  id,
-  kind:"image",
-  x, y, width, height,
-  src, name,
-  crop_x, crop_y, crop_width, crop_height
-}
+id, kind=image
+x, y, width, height
+src, name
+crop_x, crop_y, crop_width, crop_height
 ```
 
-Crop values are normalized fractions of the original asset. Cropping is therefore non-destructive: the original bytes remain untouched and only object metadata changes.
+Assets live under `~/.local/share/local-board/assets/<room>/`; cross-room asset references are rejected. Crop is non-destructive normalized metadata. `objects[]` order is image stacking order; `object.reorder` persists front/back changes. Ink renders above the image layer.
 
-`objects[]` order is also meaningful: it is the image stacking order. `object.reorder` moves an image to the front or back of the image layer and the resulting order is persisted by snapshot. Ink is still rendered above the image layer.
+## Frontend input model
 
-Assets live under `~/.local/share/local-board/assets/<room>/`. The server rejects cross-room image references in `object.create`.
+### Apple Pencil
 
-## Frontend responsibilities
+`PencilEngine` owns active freehand contact and keeps network transport out of the visual critical path. Pointer Events are primary; WebKit contact-move and stylus TouchEvent recovery remain available.
 
-### Ink/input
+Apple Pencil retains the active Pen/Eraser/Pan semantics even while a finger-selected image is open. A finger can therefore move a task image while Pencil continues to annotate.
 
-- native Canvas 2D; no whiteboard framework dependency;
-- dedicated `PencilEngine` owns the active freehand stroke independently of navigation logic;
-- default input remains conservative: Apple Pencil draws, one finger pans, two fingers pinch, mouse pans;
-- normal Pencil path is `pointerdown → pointermove* → pointerup` plus WebKit recovery from contact-bearing `pointermove` and stylus `TouchEvent` fallback;
-- Pencil ink has no debounce/cooldown and no synchronous persistence in the hot path;
-- coalesced samples render locally before network transport;
-- **tablet object routing is pointer-type aware**: a normal one-finger contact that starts inside an image is temporarily routed to image selection/move, while Apple Pencil continues to use the active ink/eraser/pan semantics;
-- selecting or inserting an image does not switch the active drawing tool; if Select happened to be active while a finger-selected image is open, Pencil is treated as Pen until the image edit is dismissed;
-- touching empty canvas with one finger clears image selection and immediately continues through the ordinary navigation/direct-input path, so object editing has no sticky mode;
-- when a second finger arrives during an image drag/crop gesture, the object preview is cancelled and both contacts are promoted to the standard pinch/pan gesture;
-- crop mode keeps its own touch routing: one finger manipulates crop handles/area rather than moving the whole image; Pencil contact cancels the active crop session and resumes drawing;
-- a separate local `directInkEnabled` preference may deliberately route Pen-tool mouse/touch contacts into `PencilEngine` with `pointer_type` equal to `mouse` or `touch`;
-- direct ink is **off by default** and stored per browser, so enabling it for one participant does not alter other participants;
-- with direct ink enabled, Pen + LMB/one finger draws and Eraser + one finger can erase; selecting Pan still routes mouse/touch to navigation;
-- two-finger pinch remains available in direct-ink mode: when a second touch arrives, any transient first-finger ink is cancelled and the contacts are converted to the ordinary pinch gesture;
-- Apple Pencil retains priority over finger/palm input even when direct ink is enabled;
-- eraser deletes whole ink strokes and is undoable through the local history controller;
-- Safari selection/callout/drag/gesture handling is suppressed on the board surface.
+`pen-ui-controls.js` handles a separate Safari problem: Pencil taps on app-style HTML controls do not always synthesize a reliable click. It converts a short, low-movement Pencil pointer tap on buttons/menu actions into the same semantic click as a finger and suppresses a possible duplicate native click. Binding is idempotent and is installed before the first profile dialog.
 
-### Selection/object editing
+### Finger / mouse
 
-`SelectionController` owns local selection, contextual image actions and crop interaction state. Selection outlines, marquee rectangles, contextual UI and an in-progress crop frame are **not shared room state**.
+Default tablet model:
 
-Supported interactions:
+```text
+Pencil → ink
+1 finger on image → select/move image
+1 finger elsewhere → pan
+2 fingers → pinch
+```
 
-- Select tool (`V`);
-- click hit-test;
-- a marquee is **pending until a real drag threshold is crossed** (6 CSS px mouse/pen, 10 CSS px touch); pointerdown alone never paints the blue rectangle;
-- selected objects also use a drag threshold before moving, preventing click jitter from shifting content;
-- `Shift` additive selection;
-- `Ctrl/Cmd+A` select all;
-- `Esc` clear selection / cancel crop;
-- `Delete/Backspace` deletes selected strokes/images;
-- `Ctrl/Cmd + drag` temporarily routes input to Select without changing the active tool;
-- held RMB drag is a temporary marquee gesture independent of the selected tool; a plain RMB click does nothing;
-- selected strokes and image objects can move;
-- a single selected image can resize from its corner while preserving aspect ratio;
-- when exactly one image is selected, a local contextual toolbar is anchored to that image instead of adding image actions to the global bottom toolbar;
-- contextual image actions: crop, copy, duplicate, image-layer front/back, reset crop and delete;
-- the delete action is explicitly labelled `Удалить`; leaving image edit is done by touching empty canvas, not by a misleading destructive close icon;
-- `Ctrl/Cmd+C` stores the selected image object for board-local paste, `Ctrl/Cmd+V` duplicates it when the system clipboard does not contain an external image file, and `Ctrl/Cmd+D` duplicates directly;
-- double-clicking a selectable image enters crop mode;
-- crop mode has eight handles plus a draggable crop area and explicit Apply/Cancel.
+Touching empty canvas dismisses image editing; there is no sticky object-edit mode. If a second finger arrives during image move/crop, current object preview is cancelled and both fingers become the ordinary pinch gesture.
 
-Transforms are committed as semantic realtime mutations (`stroke.translate`, `object.update`, `object.reorder`) rather than retransmitting historical points/image bytes. Applying crop commits geometry plus normalized `crop_*` values in one `object.update`, so peers and reconnect snapshots render the same crop.
+`directInkEnabled` is an explicit local preference for users without Pencil. When it is on:
 
-### Local undo/redo
+```text
+Pen + finger/LMB → ink
+Eraser + finger/LMB → erase
+Pan → navigation
+2 fingers → pinch
+```
 
-`LocalHistoryController` records only mutations initiated by the local browser. Remote peer events never enter another participant's local undo stack.
+Explicit direct ink has priority over image hit-testing, so a student can draw directly over an inserted photo instead of unexpectedly dragging it. Crop mode remains explicit and receives one-finger crop manipulation until it is applied/cancelled.
 
-Current reversible actions include:
+## Selection and image editing
 
-- stroke creation;
-- stroke deletion/eraser;
-- image creation/duplication/paste (`object.create`);
-- image deletion (`object.delete`).
+`SelectionController` owns local-only selection/marquee/crop/context UI.
 
-`BoardState` keeps bounded tombstone caches for deleted strokes and deleted image objects. Image tombstones retain geometry, asset URL and crop metadata, allowing `Undo` after the contextual `Удалить` action to reconstruct the same image with `object.create`; `Redo` emits `object.delete` again. History replay uses `recordHistory:false`, preventing undo/redo events from recursively becoming new user actions.
+- `V` — Select;
+- marquee appears only after a real drag threshold;
+- Shift additive selection;
+- `Ctrl/Cmd+A`, Esc, Delete/Backspace;
+- `Ctrl/Cmd + drag` temporary Select;
+- held RMB + drag temporary marquee; plain RMB click does nothing;
+- selected strokes/images move semantically;
+- image resize preserves aspect ratio;
+- selected image gets a contextual toolbar near the image;
+- actions: crop, copy, duplicate, image front/back, reset crop, delete, done;
+- double-click image enters crop;
+- crop uses eight handles + draggable crop area.
 
-### Images
+Selection outlines, crop overlay and contextual toolbar are never broadcast.
 
-`AssetController` supports:
+## Undo/redo
 
-- Image toolbar button / file picker;
-- drag&drop onto the canvas;
-- paste from clipboard;
-- PNG/JPEG/WEBP/GIF up to the current server limit;
-- upload first, then `object.create` with same-origin asset URL;
-- image bytes are fetched/cached independently by `ImageCache`;
-- image insertion selects the new object but deliberately does not change the active drawing tool;
-- `CanvasRenderer` uses the 9-argument Canvas `drawImage` form to display the selected source crop inside the board object's destination rectangle.
+`LocalHistoryController` records only locally initiated reversible actions. Remote peer mutations never enter another browser's undo stack.
 
-### Rendering
+Current reversible content actions include:
 
-- completed ink + image objects are cached into a bitmap base layer;
-- only active ink and local interaction overlays are repainted every display frame;
-- image cache invalidates the base only when an image finishes loading;
-- selection, marquee and crop overlays are local-only;
-- crop dimming is confined to the selected image rectangle, not the whole board;
-- PNG export suppresses local interaction overlays;
-- viewport (`x/y/zoom`) remains local per browser.
+- stroke create/delete;
+- image create/delete (including duplicate/paste).
+
+`BoardState` keeps bounded tombstones for deleted strokes and image objects, enabling an image deleted from its contextual menu to return with the same geometry/crop on Undo. Replay uses `recordHistory:false` to avoid recursive history entries.
+
+Background changes are currently not part of local Undo/Redo.
+
+## Background rendering
+
+`background-presets.js` defines the protocol-compatible presets. `board-background.js` installs the paper renderer into the CanvasRenderer instance without making paper choice a viewport preference.
+
+Patterns are calculated from world-space pan/zoom so grids remain anchored while moving the canvas. The completed base bitmap therefore contains:
+
+```text
+paper background
+→ images
+→ completed ink
+```
+
+Active ink and local overlays render above it.
 
 ## Camera assistance
 
-`source_zoom` on new strokes is descriptive metadata only. Camera helpers remain local:
+Viewport remains local per browser.
 
-- **auto-follow** controls whether a passive viewer pans toward remote active writing;
-- **auto-scale** independently controls whether viewer zoom approaches the writer's `source_zoom`;
-- both preferences are local and remembered separately;
-- local writing/pan/pinch/wheel immediately wins and pauses automatic movement;
-- camera target is retargetable and eased rather than packet-jumped;
-- **⌖** returns to the last writing location;
-- zoom percentage displays actual local zoom; clicking it returns to 100% around current viewport center.
+- auto-follow controls local pan toward remote writing;
+- auto-scale independently approaches writer `source_zoom`;
+- both are local remembered preferences;
+- local input immediately wins;
+- `⌖` focuses last writing location;
+- zoom percentage is actual local zoom; clicking returns to 100% around current viewport centre.
 
-No role names such as teacher/student are part of this engine.
+Participant roles do not alter these drawing/camera rules.
 
 ## Realtime protocol
 
 Client mutations:
 
-- `stroke.begin`
-- `stroke.append`
-- `stroke.end`
-- `stroke.delete`
-- `stroke.restore`
-- `stroke.translate`
-- `object.create`
-- `object.update`
-- `object.reorder`
-- `object.delete`
-- `board.clear`
+```text
+stroke.begin
+stroke.append
+stroke.end
+stroke.delete
+stroke.restore
+stroke.translate
+object.create
+object.update
+object.reorder
+object.delete
+board.background
+board.clear
+```
 
 Server messages:
 
-- `snapshot`
-- `event`
-- `ack`
-- `presence`
-- `error`
+```text
+snapshot
+event
+ack
+presence
+error
+```
 
-Every mutation carries `op_id`; retries are deduplicated server-side. Structural mutations are persisted atomically. Reconnect starts from authoritative snapshot and resends pending operations.
+Every mutation has `op_id`; retry delivery is deduplicated. Structural mutations are persisted atomically. Reconnect starts from authoritative snapshot then resends pending operations.
+
+Presence is ephemeral and additionally carries `roster`; it does not increment board revision.
 
 ## Persistence
 
@@ -209,49 +228,56 @@ Every mutation carries `op_id`; retries are deduplicated server-side. Structural
 ~/.local/share/local-board/assets/<room>/<asset>
 ```
 
-Override the root with `LOCAL_BOARD_DATA_DIR`.
+Override root with `LOCAL_BOARD_DATA_DIR`.
 
-JSON + filesystem assets intentionally fit the current single-process phase. Persistence, room state and transport are separated so a future internet deployment can replace storage without rewriting input/selection/rendering logic.
+Current JSON/filesystem storage intentionally matches single-process deployment.
 
 ## Deployment boundary
 
-### Current phase
+### Current
 
 - one Uvicorn/FastAPI process;
-- active `BoardRoom` state is process-local;
-- persistent JSON + image files on one disk;
-- trusted/small-room usage;
-- no authentication.
+- process-local authoritative `BoardRoom`;
+- JSON + image files on one disk;
+- no real authentication;
+- roles are descriptive only.
 
-### Public single-instance phase
+### Public single-instance
 
 ```text
-Browsers
-  ↓ HTTPS / WSS
-Reverse proxy / TLS or outbound tunnel
-  ↓
+Browser
+ ↓ HTTPS/WSS
+Cloudflare Tunnel / reverse proxy
+ ↓
 one Local Board process
-  ↓
+ ↓
 persistent volume
 ```
 
-While `BoardRoom` is in memory, run **one application worker**. Before permanent public exposure add at minimum HTTPS/WSS, ownership/invite auth separate from room code, rate limits, Origin/Host checks, upload/request limits, backups and abuse monitoring.
+Before permanent internet exposure add at minimum:
 
-### Multi-instance phase
+- owner/invite secrets independent of room code and role label;
+- private owner dashboard;
+- server-side permission checks;
+- Origin/Host validation;
+- rate limits and request/upload limits;
+- backups/abuse monitoring.
 
-When one process is insufficient, introduce shared durable room metadata/state plus a cross-instance event/presence layer (for example Redis/broker). Do not merely start multiple workers and hope clients land on the same process.
+While `BoardRoom` is in memory, run one app worker.
 
-CRDT remains optional and should be introduced only when richer concurrent object editing actually requires it.
+### Multi-instance
 
-## Deliberate non-goals for 0.4
+Multiple app workers require shared durable state plus cross-instance event/presence transport (for example a broker). Do not scale by merely starting several independent `BoardRoom` processes.
 
-- fixed teacher/student behavior in drawing engine;
-- accounts/authentication;
+CRDT remains optional until richer concurrent editing actually needs it.
+
+## Deliberate non-goals for current phase
+
+- role-based security without real credentials;
+- accounts;
 - public internet hardening;
 - multi-process horizontal scaling;
 - rich text/sticky notes/connectors/PDF-page objects;
-- lesson scheduling/history product layer.
+- lesson scheduling/product CRM layer.
 
-Images, contextual image editing, non-destructive crop and basic object selection are part of the implemented board model; richer object types can extend the same protocol/state seams later.
-
-See [`deployment.md`](deployment.md) for the staged deployment plan.
+See [`deployment.md`](deployment.md) for deployment stages.
