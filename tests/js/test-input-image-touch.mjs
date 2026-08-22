@@ -115,4 +115,16 @@ function makeHarness() {
   assert.equal(controller.touchPointers.has(3), true, "the same empty-canvas touch still starts normal navigation");
 }
 
+{
+  const { controller, selection } = makeHarness();
+  controller.setDirectInkEnabled(true);
+  controller.setTool("pen");
+  let started = null;
+  controller.startSoftInk = (event, pointerType) => { started = { event, pointerType }; };
+
+  controller.onPointerDown(touch(4, 150, 140));
+  assert.equal(started?.pointerType, "touch", "explicit finger-ink mode must write even directly over an image");
+  assert.equal(selection.selectedKey, null, "finger ink over an image must not unexpectedly enter image editing");
+}
+
 console.log("Input image-touch tests passed");
