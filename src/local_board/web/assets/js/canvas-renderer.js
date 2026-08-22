@@ -6,6 +6,7 @@ export class CanvasRenderer {
     this.dpr = Math.max(1, window.devicePixelRatio || 1);
     this.view = this.loadView(boardId);
     this.boardId = boardId;
+    this.renderHandle = null;
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(canvas.parentElement);
     this.resize();
@@ -37,6 +38,14 @@ export class CanvasRenderer {
     this.canvas.style.width = `${rect.width}px`;
     this.canvas.style.height = `${rect.height}px`;
     this.render();
+  }
+
+  requestRender() {
+    if (this.renderHandle !== null) return;
+    this.renderHandle = requestAnimationFrame(() => {
+      this.renderHandle = null;
+      this.render();
+    });
   }
 
   render() {
@@ -132,7 +141,7 @@ export class CanvasRenderer {
   panBy(dx, dy) {
     this.view.x += dx;
     this.view.y += dy;
-    this.render();
+    this.requestRender();
   }
 
   zoomAt(clientX, clientY, newZoom) {
@@ -143,16 +152,18 @@ export class CanvasRenderer {
     this.view.zoom = clamp(newZoom, 0.2, 5);
     this.view.x = sx - before.x * this.view.zoom;
     this.view.y = sy - before.y * this.view.zoom;
-    this.render();
+    this.requestRender();
   }
 
   resetView() {
     this.view = { x: 0, y: 0, zoom: 1 };
     this.saveView();
-    this.render();
+    this.requestRender();
   }
 
   exportPng() {
+    // Ensure the exported bitmap includes the latest queued frame.
+    this.render();
     const anchor = document.createElement("a");
     anchor.href = this.canvas.toDataURL("image/png");
     anchor.download = `local-board-${this.boardId}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.png`;
