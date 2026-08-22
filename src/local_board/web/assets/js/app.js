@@ -3,6 +3,7 @@ import { CanvasRenderer } from "./canvas-renderer.js";
 import { InputController } from "./input-controller.js";
 import { createInputDiagnostics } from "./input-diagnostics.js";
 import { RealtimeClient } from "./realtime-client.js";
+import { RemoteFollowController } from "./remote-follow.js";
 import { createId } from "./id.js";
 
 const boardId = resolveBoardId();
@@ -10,6 +11,7 @@ const clientId = getClientId();
 const state = new BoardState();
 const canvas = document.getElementById("board");
 const renderer = new CanvasRenderer(canvas, state, boardId);
+const remoteFollow = new RemoteFollowController({ renderer, localClientId: clientId });
 const localUndo = [];
 const localRedo = [];
 const inputDebug = createInputDiagnostics();
@@ -33,6 +35,8 @@ const input = new InputController({
   },
 });
 
+bindRemoteFollowInteractionGuards(canvas, remoteFollow);
+
 realtime = new RealtimeClient({
   boardId,
   clientId,
@@ -46,6 +50,11 @@ realtime = new RealtimeClient({
     // Multiple WebSocket append packets arriving in the same frame are therefore
     // rendered together instead of forcing repeated full synchronous paints.
     state.applyEvent(event, revision, actorId);
+
+    // Follow is role-neutral: any remote participant who starts writing can become
+    // the active writer for this viewer. The controller only moves this browser's
+    // local camera and never sends viewport coordinates over the network.
+    remoteFollow.observe(event, actorId);
     renderer.requestRender();
 
     // Remote append traffic is hot-path data; it cannot change our local undo
@@ -210,6 +219,32 @@ function updateConnection(status) {
     text.textContent = "Оффлайн";
     banner.classList.remove("hidden");
   }
+}
+
+function bindRemoteFollowInteractionGuards(targetCanvas, follow) {
+  const note = () => follow.noteLocalInteraction();
+
+  // Any active local manipulation temporarily wins over passive remote following.
+  // Move events refresh the grace period so a long pan/write cannot be interrupted.
+  targetCanvas.addEventListener("pointerdown", note, { capture: true, passive: true });
+  window.addEventListener("pointermove", (event) => {
+    const pressure = Number(event.pressure || 0);
+    const buttons = Number(event.buttons || 0);
+    if (pressure > 0 || buttons !== 0 || event.pointerType === "touch") note();
+  }, { capture: true, passive: true });
+  window.addEventListener("pointerup", note, { capture: true, passive: true });
+  window.addEventListener("pointercancel", note, { capture: true, passive: true });
+
+  // Safari's Pencil fallback can exist only as Touch Events on a problematic
+  // contact, so keep those interactions authoritative too.
+  targetCanvas.addEventListener("touchstart", note, { capture: true, passive: true });
+  window.addEventListener("touchmove", note, { capture: true, passive: true });
+  window.addEventListener("touchend", note, { capture: true, passive: true });
+  targetCanvas.addEventListener("wheel", note, { capture: true, passive: true });
+
+  // View/tool actions are deliberate local intent as well; do not immediately
+  // pull the user back to a remote writer after they touched the toolbar.
+  document.querySelector(".toolbar")?.addEventListener("pointerdown", note, { capture: true, passive: true });
 }
 
 function bindInputDiagnostics(targetCanvas, debug) {
