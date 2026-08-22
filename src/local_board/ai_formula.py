@@ -11,9 +11,8 @@ import httpx
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 # Ox Alpha is currently free on OpenRouter, accepts image input and has a single
-# highly-available provider. For interactive whiteboard OCR, predictable quality
-# is more important than racing unrelated free models and accepting the first
-# answer (which previously allowed safety-model text to reach the board).
+# highly-available provider. Keep formula OCR deterministic: one known model,
+# never a random free router that can return unrelated/safety output.
 DEFAULT_FORMULA_MODEL = "stealth/ox-alpha"
 
 # Old values from previous experiments are intentionally migrated back to Ox.
@@ -32,9 +31,17 @@ LEGACY_FORMULA_MODELS = {
 
 MAX_FORMULA_IMAGE_CHARS = 2_000_000
 MAX_LATEX_CHARS = 2048
-MAX_OUTPUT_TOKENS = 48
+# A short formula needs very few visible tokens, but do not use an extremely
+# tiny cap on a reasoning model: some providers account hidden reasoning against
+# completion limits differently. Latency is controlled with minimal reasoning.
+MAX_OUTPUT_TOKENS = 256
 NO_FORMULA_TOKEN = "__NO_FORMULA__"
-REQUEST_TIMEOUT_SECONDS = 9.0
+
+# OpenRouter currently reports Ox Alpha around 6.8s P50 latency. A 9s client
+# timeout was therefore cutting off healthy slow-tail requests and surfacing
+# them as fake 503s. Keep a generous transport timeout; UI timing still exposes
+# the real latency so we can evaluate the model honestly.
+REQUEST_TIMEOUT_SECONDS = 22.0
 TRANSIENT_HTTP_STATUSES = {408, 409, 425, 429, 500, 502, 503, 504}
 _IMAGE_DATA_URL_RE = re.compile(r"^data:image/(png|jpeg|webp);base64,[A-Za-z0-9+/=\r\n]+$")
 
@@ -79,7 +86,6 @@ def validate_free_formula_model(model: str) -> str:
 
 
 def formula_model_candidates(model: str) -> list[str]:
-    # No heterogeneous race/fallback: one model = one deterministic OCR result.
     return [validate_free_formula_model(model)]
 
 
@@ -95,9 +101,15 @@ async def recognize_formula(
         raise FormulaRecognitionError("OPENROUTER_API_KEY is not configured")
 
     started = time.perf_counter()
-    result = await _recognize_with_model(image_data_url, api_key=api_key, model=model)
+    try:
+        result = await _recognize_with_model(image_data_url, api_key=api_key, model=model)
+    except Exception:
+        elapsed_ms = round((time.perf_counter() - started) * 1000)
+        logger.exception("Formula OCR failed via %s after %dms", model, elapsed_ms)
+        raise
     result["attempted_models"] = [model]
     result["elapsed_ms"] = round((time.perf_counter() - started) * 1000)
+    logger.info("Formula OCR succeeded via %s in %dms", model, result["elapsed_ms"])
     return result
 
 
@@ -107,8 +119,6 @@ async def _recognize_with_model(
     api_key: str,
     model: str,
 ) -> dict[str, Any]:
-    # Deliberately tiny prompt/output. This task is visual transcription, not
-    # mathematical reasoning. Asking for one bare LaTeX string minimizes decode.
     prompt = (
         "OCR the handwritten math in this crop. Return ONLY the exact MathJax LaTeX, "
         "no explanation, no solving, no markdown, no $ delimiters. Preserve every "
@@ -128,9 +138,10 @@ async def _recognize_with_model(
         ],
         "max_tokens": MAX_OUTPUT_TOKENS,
         "temperature": 0,
-        # Ox is a reasoning model, but OCR does not benefit from a long thinking
-        # trace. OpenRouter/provider may ignore unsupported controls safely.
-        "reasoning": {"effort": "low", "exclude": True},
+        # OCR is transcription, not a reasoning task. Use the smallest supported
+        # reasoning effort. If a provider normalizes this value, OpenRouter still
+        # keeps the request valid; excluding reasoning keeps only useful text.
+        "reasoning": {"effort": "minimal", "exclude": True},
         "provider": {
             "sort": "latency",
             "allow_fallbacks": True,
@@ -143,21 +154,39 @@ async def _recognize_with_model(
         "X-Title": "Local Board Formula OCR",
     }
 
+    request_started = time.perf_counter()
     try:
         client = _get_http_client()
         response = await client.post(
             OPENROUTER_CHAT_URL,
             headers=headers,
             json=payload,
-            timeout=httpx.Timeout(REQUEST_TIMEOUT_SECONDS, connect=1.5),
+            timeout=httpx.Timeout(REQUEST_TIMEOUT_SECONDS, connect=2.0),
         )
-    except (httpx.TimeoutException, httpx.NetworkError) as exc:
-        raise FormulaProviderUnavailableError("Ox Alpha timeout/network error") from exc
+    except httpx.TimeoutException as exc:
+        elapsed = round((time.perf_counter() - request_started) * 1000)
+        logger.warning("Ox Alpha HTTP timeout after %dms", elapsed)
+        raise FormulaProviderUnavailableError(
+            f"Ox Alpha did not answer within {REQUEST_TIMEOUT_SECONDS:.0f}s"
+        ) from exc
+    except httpx.NetworkError as exc:
+        elapsed = round((time.perf_counter() - request_started) * 1000)
+        logger.warning("Ox Alpha network error after %dms: %s", elapsed, exc)
+        raise FormulaProviderUnavailableError("Ox Alpha network error") from exc
     except httpx.HTTPError as exc:
+        elapsed = round((time.perf_counter() - request_started) * 1000)
+        logger.warning("OpenRouter HTTP error after %dms: %s", elapsed, exc)
         raise FormulaProviderUnavailableError("OpenRouter is unreachable") from exc
 
+    elapsed = round((time.perf_counter() - request_started) * 1000)
     if response.status_code >= 400:
         detail = _openrouter_error_detail(response)
+        logger.warning(
+            "Ox Alpha HTTP %d after %dms: %s",
+            response.status_code,
+            elapsed,
+            detail,
+        )
         if response.status_code in {401, 403}:
             raise FormulaRecognitionError(
                 f"OpenRouter authentication error {response.status_code}: {detail}"
@@ -200,7 +229,7 @@ def _get_http_client() -> httpx.AsyncClient:
     global _http_client
     if _http_client is None or _http_client.is_closed:
         _http_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(REQUEST_TIMEOUT_SECONDS, connect=1.5),
+            timeout=httpx.Timeout(REQUEST_TIMEOUT_SECONDS, connect=2.0),
             limits=httpx.Limits(max_keepalive_connections=4, max_connections=8),
             http2=False,
         )
