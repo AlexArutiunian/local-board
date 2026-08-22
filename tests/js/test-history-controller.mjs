@@ -17,6 +17,23 @@ function stroke(id = "s1") {
   };
 }
 
+function image(id = "img-1") {
+  return {
+    id,
+    kind: "image",
+    x: 20,
+    y: 30,
+    width: 320,
+    height: 180,
+    src: "/api/boards/1234/assets/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png",
+    name: "task.png",
+    crop_x: 0.1,
+    crop_y: 0.15,
+    crop_width: 0.75,
+    crop_height: 0.7,
+  };
+}
+
 function apply(state, event) {
   state.applyEvent(event, null, "local");
 }
@@ -64,6 +81,51 @@ function apply(state, event) {
   assert.equal(redoErase.stroke_id, "erased");
   apply(state, redoErase);
   assert.equal(state.hasStroke("erased"), false, "redo must erase the stroke again");
+}
+
+{
+  const state = new BoardState();
+  const history = new LocalHistoryController({ state });
+  const created = { type: "object.create", op_id: "create-image", object: image("photo") };
+  apply(state, created);
+  history.observeLocalEvent(created);
+
+  const undoInsert = history.undo();
+  assert.equal(undoInsert.type, "object.delete");
+  assert.equal(undoInsert.object_id, "photo");
+  apply(state, undoInsert);
+  assert.equal(state.hasObject("photo"), false, "undo after image insertion removes the image");
+
+  const redoInsert = history.redo();
+  assert.equal(redoInsert.type, "object.create");
+  assert.equal(redoInsert.object.id, "photo");
+  apply(state, redoInsert);
+  assert.equal(state.hasObject("photo"), true, "redo restores an inserted image");
+}
+
+{
+  const state = new BoardState();
+  const history = new LocalHistoryController({ state });
+  apply(state, { type: "object.create", object: image("deleted-photo") });
+
+  const deletion = { type: "object.delete", op_id: "delete-image", object_id: "deleted-photo" };
+  apply(state, deletion);
+  assert.equal(state.hasObject("deleted-photo"), false);
+  assert.equal(state.getDeletedObject("deleted-photo").crop_width, 0.75);
+  history.observeLocalEvent(deletion);
+
+  const undoDelete = history.undo();
+  assert.equal(undoDelete.type, "object.create");
+  assert.equal(undoDelete.object.id, "deleted-photo");
+  assert.equal(undoDelete.object.crop_x, 0.1);
+  apply(state, undoDelete);
+  assert.equal(state.hasObject("deleted-photo"), true, "undo must restore the deleted image");
+
+  const redoDelete = history.redo();
+  assert.equal(redoDelete.type, "object.delete");
+  assert.equal(redoDelete.object_id, "deleted-photo");
+  apply(state, redoDelete);
+  assert.equal(state.hasObject("deleted-photo"), false, "redo must delete the image again");
 }
 
 {
