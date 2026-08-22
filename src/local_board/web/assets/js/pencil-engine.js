@@ -120,6 +120,10 @@ export class PencilEngine {
       this.state.applyEvent(mutation, null, this.clientId);
       this.sendEvent(mutation);
       this.onStrokeFinished(strokeId);
+
+      // The stroke just moved from the lightweight live layer to the cached
+      // completed layer. Rebuild that cache once, not on every move.
+      this.renderer.invalidateBase();
       this.renderer.requestRender();
     }
 
