@@ -73,7 +73,7 @@ def test_two_clients_receive_live_stroke_and_new_client_gets_snapshot(tmp_path):
                 assert snapshot["strokes"][0]["source_zoom"] == 0.65
 
 
-def test_image_object_and_transforms_sync_and_survive_snapshot(tmp_path):
+def test_image_object_crop_syncs_and_survives_snapshot(tmp_path):
     app = create_app(tmp_path)
 
     with TestClient(app) as client:
@@ -99,7 +99,16 @@ def test_image_object_and_transforms_sync_and_survive_snapshot(tmp_path):
             "type": "object.update",
             "op_id": "object-update",
             "object_id": "img-1",
-            "patch": {"x": 160, "y": 170, "width": 400, "height": 225},
+            "patch": {
+                "x": 160,
+                "y": 170,
+                "width": 240,
+                "height": 135,
+                "crop_x": 0.125,
+                "crop_y": 0.1,
+                "crop_width": 0.75,
+                "crop_height": 0.75,
+            },
         }
 
         with client.websocket_connect(f"{socket_path}?client_id=a") as a:
@@ -113,12 +122,15 @@ def test_image_object_and_transforms_sync_and_survive_snapshot(tmp_path):
                 created_remote = receive_type(b, "event")["event"]
                 assert created_remote["type"] == "object.create"
                 assert created_remote["object"]["src"] == src
+                assert created_remote["object"]["crop_width"] == 1.0
 
                 a.send_json(update_object)
                 receive_type(a, "ack", op_id="object-update")
                 updated_remote = receive_type(b, "event")["event"]
                 assert updated_remote["type"] == "object.update"
                 assert updated_remote["patch"]["x"] == 160.0
+                assert updated_remote["patch"]["crop_x"] == 0.125
+                assert updated_remote["patch"]["crop_width"] == 0.75
 
             with client.websocket_connect(f"{socket_path}?client_id=c") as c:
                 snapshot = receive_type(c, "snapshot")["board"]
@@ -126,7 +138,9 @@ def test_image_object_and_transforms_sync_and_survive_snapshot(tmp_path):
                 image = snapshot["objects"][0]
                 assert image["id"] == "img-1"
                 assert image["x"] == 160.0
-                assert image["width"] == 400.0
+                assert image["width"] == 240.0
+                assert image["crop_x"] == 0.125
+                assert image["crop_height"] == 0.75
 
 
 def test_stroke_translation_is_broadcast_and_persisted(tmp_path):
