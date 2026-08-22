@@ -13,6 +13,10 @@ MAX_SOURCE_ZOOM = 5.0
 MAX_OBJECT_DIMENSION = 20_000.0
 MAX_TRANSLATION = 100_000.0
 MIN_CROP_SIZE = 0.01
+PARTICIPANT_ROLES = {"teacher", "student"}
+BACKGROUND_PATTERNS = {"plain", "dots", "grid", "fine-grid", "ruled", "cornell", "isometric"}
+BACKGROUND_TONES = {"white", "warm", "gray", "blue", "green"}
+DEFAULT_BACKGROUND = {"pattern": "dots", "tone": "white"}
 MUTATION_TYPES = {
     "stroke.begin",
     "stroke.append",
@@ -24,6 +28,7 @@ MUTATION_TYPES = {
     "object.update",
     "object.reorder",
     "object.delete",
+    "board.background",
     "board.clear",
 }
 
@@ -53,6 +58,33 @@ def _crop_number(value: Any, field: str, *, positive: bool = False) -> float:
     if not lower <= number <= 1.0:
         raise ProtocolError("invalid object crop")
     return number
+
+
+def normalize_participant_profile(name: Any, role: Any, device: Any) -> dict[str, str]:
+    clean_name = str(name or "").strip()
+    clean_role = str(role or "").strip().lower()
+    clean_device = str(device or "").strip()
+    if not clean_name or len(clean_name) > 48:
+        raise ProtocolError("invalid participant name")
+    if clean_role not in PARTICIPANT_ROLES:
+        raise ProtocolError("invalid participant role")
+    if not clean_device or len(clean_device) > 32:
+        raise ProtocolError("invalid participant device")
+    return {"name": clean_name, "role": clean_role, "device": clean_device}
+
+
+def normalize_background(payload: Any) -> dict[str, str]:
+    if payload is None:
+        return dict(DEFAULT_BACKGROUND)
+    if not isinstance(payload, dict):
+        raise ProtocolError("invalid board background")
+    pattern = str(payload.get("pattern", DEFAULT_BACKGROUND["pattern"]))
+    tone = str(payload.get("tone", DEFAULT_BACKGROUND["tone"]))
+    if pattern not in BACKGROUND_PATTERNS:
+        raise ProtocolError("invalid background pattern")
+    if tone not in BACKGROUND_TONES:
+        raise ProtocolError("invalid background tone")
+    return {"pattern": pattern, "tone": tone}
 
 
 def normalize_points(payload: Any, *, max_points: int = MAX_POINTS_PER_BATCH) -> list[dict[str, float]]:
@@ -202,5 +234,7 @@ def normalize_client_event(payload: Any) -> dict[str, Any]:
         event["position"] = position
     elif message_type == "object.delete":
         event["object_id"] = _nonempty_string(payload.get("object_id"), "object_id")
+    elif message_type == "board.background":
+        event["background"] = normalize_background(payload.get("background"))
 
     return event
