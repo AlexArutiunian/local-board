@@ -58,17 +58,40 @@ def test_normalizes_image_object_and_update():
         }
     )
     assert created["object"]["width"] == 320.0
+    assert created["object"]["crop_x"] == 0.0
+    assert created["object"]["crop_width"] == 1.0
 
     updated = normalize_client_event(
         {
             "type": "object.update",
             "op_id": "obj-move",
             "object_id": "img-1",
-            "patch": {"x": 44, "y": 55, "width": 400, "height": 225},
+            "patch": {
+                "x": 44,
+                "y": 55,
+                "width": 400,
+                "height": 225,
+                "crop_x": 0.1,
+                "crop_y": 0.2,
+                "crop_width": 0.7,
+                "crop_height": 0.6,
+            },
         }
     )
     assert updated["patch"]["x"] == 44.0
-    assert updated["patch"]["width"] == 400.0
+    assert updated["patch"]["crop_width"] == 0.7
+
+
+def test_rejects_invalid_crop_values():
+    with pytest.raises(ProtocolError):
+        normalize_client_event(
+            {
+                "type": "object.update",
+                "op_id": "bad-crop",
+                "object_id": "img-1",
+                "patch": {"crop_width": 1.5},
+            }
+        )
 
 
 def test_normalizes_stroke_translation():
