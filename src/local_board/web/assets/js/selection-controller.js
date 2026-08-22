@@ -6,7 +6,12 @@ import {
   objectKey,
   parseItemKey,
 } from "./board-geometry.js";
+import { cloneBoardObject } from "./board-state.js";
 import { createId } from "./id.js";
+
+const MOUSE_DRAG_THRESHOLD = 6;
+const TOUCH_DRAG_THRESHOLD = 10;
+const CLIPBOARD_MARKER = "local-board:image-object";
 
 export class SelectionController {
   constructor({ canvas, state, renderer, sendEvent, clientId, onSelectionChange }) {
@@ -16,21 +21,31 @@ export class SelectionController {
     this.sendEvent = sendEvent;
     this.clientId = clientId;
     this.onSelectionChange = onSelectionChange;
+
     this.selected = new Set();
     this.activePointerId = null;
     this.activePointerType = null;
     this.requiredButtonMask = 0;
     this.mode = null;
     this.anchor = null;
+    this.screenAnchor = null;
     this.originals = new Map();
     this.lastDelta = { dx: 0, dy: 0 };
     this.marqueeAdditive = false;
+    this.pendingForceMarquee = false;
 
     this.cropObjectId = null;
     this.cropRect = null;
     this.cropOriginalRect = null;
+
+    this.imageClipboard = null;
+    this.contextBar = this.createImageContextBar();
+    this.contextFrame = null;
+
     this.bindRightMouseShortcut();
+    this.bindImageDoubleClick();
     this.bindKeyboard();
+    this.bindClipboard();
   }
 
   ownsPointer(pointerId) { return this.activePointerId === pointerId; }
@@ -50,12 +65,17 @@ export class SelectionController {
   clear() { this.setSelection([]); }
   selectAll() { this.setSelection(allItemKeys(this.state)); }
 
-  startCrop() {
-    if (this.selected.size !== 1) return false;
+  selectedImage() {
+    if (this.selected.size !== 1) return null;
     const parsed = parseItemKey([...this.selected][0]);
-    if (parsed?.kind !== "object") return false;
+    if (parsed?.kind !== "object") return null;
     const object = this.state.getObject(parsed.id);
-    if (!object || object.kind !== "image") return false;
+    return object?.kind === "image" ? object : null;
+  }
+
+  startCrop() {
+    const object = this.selectedImage();
+    if (!object) return false;
     this.cancelPointer();
     this.cropObjectId = object.id;
     this.cropRect = { x: object.x, y: object.y, width: object.width, height: object.height };
@@ -91,6 +111,89 @@ export class SelectionController {
     return true;
   }
 
+  resetSelectedCrop() {
+    const object = this.selectedImage();
+    if (!object || !hasAppliedCrop(object)) return false;
+    const cropWidth = Math.max(0.01, Number(object.crop_width ?? 1));
+    const cropHeight = Math.max(0.01, Number(object.crop_height ?? 1));
+    const fullWidth = object.width / cropWidth;
+    const fullHeight = object.height / cropHeight;
+    const patch = {
+      x: object.x - Number(object.crop_x ?? 0) * fullWidth,
+      y: object.y - Number(object.crop_y ?? 0) * fullHeight,
+      width: fullWidth,
+      height: fullHeight,
+      crop_x: 0,
+      crop_y: 0,
+      crop_width: 1,
+      crop_height: 1,
+    };
+    const event = { type: "object.update", op_id: createId(), object_id: object.id, patch };
+    this.state.applyEvent(event, null, this.clientId);
+    this.sendEvent(event);
+    this.renderer.invalidateBase();
+    this.renderer.requestRender();
+    this.notifySelection();
+    return true;
+  }
+
+  copySelectedImage({ writeSystemClipboard = true } = {}) {
+    const object = this.selectedImage();
+    if (!object) return false;
+    this.imageClipboard = cloneBoardObject(object);
+    if (writeSystemClipboard) this.writeClipboardMarker();
+    this.flashContextAction("imageCopy", "Скопировано");
+    return true;
+  }
+
+  duplicateSelectedImage() {
+    const object = this.selectedImage();
+    if (!object) return false;
+    return this.createImageCopy(object);
+  }
+
+  pasteCopiedImage() {
+    if (!this.imageClipboard) return false;
+    return this.createImageCopy(this.imageClipboard);
+  }
+
+  createImageCopy(source) {
+    const offset = 24 / Math.max(0.2, this.renderer.view.zoom);
+    const object = {
+      id: createId(),
+      kind: "image",
+      x: Number(source.x) + offset,
+      y: Number(source.y) + offset,
+      width: Number(source.width),
+      height: Number(source.height),
+      src: String(source.src),
+      name: String(source.name || "image"),
+      crop_x: Number(source.crop_x ?? 0),
+      crop_y: Number(source.crop_y ?? 0),
+      crop_width: Number(source.crop_width ?? 1),
+      crop_height: Number(source.crop_height ?? 1),
+    };
+    const event = { type: "object.create", op_id: createId(), object };
+    this.state.applyEvent(event, null, this.clientId);
+    this.sendEvent(event);
+    this.selectOnly(objectKey(object.id));
+    this.renderer.invalidateBase();
+    this.renderer.requestRender();
+    return true;
+  }
+
+  reorderSelectedImage(position) {
+    const object = this.selectedImage();
+    if (!object || !["front", "back"].includes(position)) return false;
+    const event = { type: "object.reorder", op_id: createId(), object_id: object.id, position };
+    this.state.applyEvent(event, null, this.clientId);
+    this.sendEvent(event);
+    this.renderer.invalidateBase();
+    this.renderer.requestRender();
+    this.notifySelection();
+    return true;
+  }
+
   pointerDown(event, { forceMarquee = false } = {}) {
     if (this.isCropping()) return this.cropPointerDown(event);
 
@@ -99,8 +202,9 @@ export class SelectionController {
     this.preparePointer(event, world);
 
     if (forceMarquee) {
-      if (!additive) this.clear();
-      this.startMarquee(world, additive);
+      this.mode = "pending-marquee";
+      this.marqueeAdditive = additive;
+      this.pendingForceMarquee = true;
       return true;
     }
 
@@ -122,7 +226,7 @@ export class SelectionController {
       }
 
       if (this.selected.has(hit)) {
-        this.mode = "move";
+        this.mode = "pending-move";
         this.captureOriginals();
       } else {
         this.finishGestureState();
@@ -130,8 +234,9 @@ export class SelectionController {
       return true;
     }
 
-    if (!additive) this.clear();
-    this.startMarquee(world, additive);
+    this.mode = "pending-marquee";
+    this.marqueeAdditive = additive;
+    this.pendingForceMarquee = false;
     return true;
   }
 
@@ -150,6 +255,7 @@ export class SelectionController {
     this.activePointerType = event.pointerType || null;
     this.requiredButtonMask = this.activePointerType === "mouse" ? buttonMask(event.button) : 0;
     this.anchor = world;
+    this.screenAnchor = { x: event.clientX, y: event.clientY };
     this.lastDelta = { dx: 0, dy: 0 };
     try { this.canvas.setPointerCapture?.(event.pointerId); } catch (_) {}
   }
@@ -165,15 +271,26 @@ export class SelectionController {
     }
 
     const world = this.renderer.screenToWorld(event.clientX, event.clientY);
+    const dx = world.x - this.anchor.x;
+    const dy = world.y - this.anchor.y;
+    this.lastDelta = { dx, dy };
+
+    if (this.mode === "pending-marquee" || this.mode === "pending-move") {
+      if (!this.dragThresholdReached(event)) return true;
+      if (this.mode === "pending-marquee") {
+        if (!this.marqueeAdditive) this.clear();
+        this.mode = "marquee";
+        this.renderer.setMarquee({ x1: this.anchor.x, y1: this.anchor.y, x2: world.x, y2: world.y });
+        return true;
+      }
+      this.mode = "move";
+    }
 
     if (this.mode === "marquee") {
       this.renderer.setMarquee({ x1: this.anchor.x, y1: this.anchor.y, x2: world.x, y2: world.y });
       return true;
     }
 
-    const dx = world.x - this.anchor.x;
-    const dy = world.y - this.anchor.y;
-    this.lastDelta = { dx, dy };
     if (this.mode === "move") this.previewMove(dx, dy);
     else if (this.mode === "resize") this.previewResize(dx, dy);
     else if (this.mode.startsWith("crop:")) this.previewCrop(this.mode.slice(5), dx, dy);
@@ -184,7 +301,11 @@ export class SelectionController {
     if (!this.ownsPointer(event.pointerId)) return false;
     const mode = this.mode;
 
-    if (mode === "marquee") {
+    if (mode === "pending-marquee") {
+      // A plain empty click clears selection, but an accidental RMB click does
+      // nothing. Marquee only exists after crossing the drag threshold.
+      if (!this.pendingForceMarquee && !this.marqueeAdditive) this.clear();
+    } else if (mode === "marquee") {
       const world = this.renderer.screenToWorld(event.clientX, event.clientY);
       const hits = itemsIntersectingRect(this.state, {
         x1: this.anchor.x,
@@ -207,6 +328,12 @@ export class SelectionController {
     return true;
   }
 
+  dragThresholdReached(event) {
+    if (!this.screenAnchor) return true;
+    const threshold = this.activePointerType === "touch" ? TOUCH_DRAG_THRESHOLD : MOUSE_DRAG_THRESHOLD;
+    return Math.hypot(event.clientX - this.screenAnchor.x, event.clientY - this.screenAnchor.y) >= threshold;
+  }
+
   cancelPointer() {
     const pointerId = this.activePointerId;
     if (this.mode === "move" || this.mode === "resize") this.restoreOriginals();
@@ -220,21 +347,17 @@ export class SelectionController {
     this.renderer.requestRender();
   }
 
-  startMarquee(world, additive) {
-    this.mode = "marquee";
-    this.marqueeAdditive = additive;
-    this.renderer.setMarquee({ x1: world.x, y1: world.y, x2: world.x, y2: world.y });
-  }
-
   finishGestureState() {
     this.activePointerId = null;
     this.activePointerType = null;
     this.requiredButtonMask = 0;
     this.mode = null;
     this.anchor = null;
+    this.screenAnchor = null;
     this.originals.clear();
     this.lastDelta = { dx: 0, dy: 0 };
     this.marqueeAdditive = false;
+    this.pendingForceMarquee = false;
     this.cropOriginalRect = null;
   }
 
@@ -253,8 +376,22 @@ export class SelectionController {
       event.stopImmediatePropagation();
       if (this.activePointerId !== null) this.cancelPointer();
       this.pointerDown(event, { forceMarquee: true });
-      try { this.canvas.setPointerCapture?.(event.pointerId); } catch (_) {}
     }, { capture: true, passive: false });
+  }
+
+  bindImageDoubleClick() {
+    this.canvas.addEventListener("dblclick", (event) => {
+      if (this.isCropping()) return;
+      const world = this.renderer.screenToWorld(event.clientX, event.clientY);
+      const hit = hitTest(this.state, world, 7 / this.renderer.view.zoom);
+      const parsed = parseItemKey(hit);
+      if (parsed?.kind !== "object") return;
+      const object = this.state.getObject(parsed.id);
+      if (object?.kind !== "image") return;
+      event.preventDefault();
+      this.selectOnly(hit);
+      this.startCrop();
+    }, { passive: false });
   }
 
   releasePointerCapture(pointerId) {
@@ -471,12 +608,166 @@ export class SelectionController {
         : false;
   }
 
-  notifySelection() { this.onSelectionChange?.(this.keys()); }
+  notifySelection() {
+    this.syncImageContextBar();
+    this.onSelectionChange?.(this.keys());
+  }
+
+  createImageContextBar() {
+    if (typeof document === "undefined") return null;
+    const bar = document.createElement("div");
+    bar.className = "image-context-bar hidden";
+    bar.setAttribute("role", "toolbar");
+    bar.setAttribute("aria-label", "Действия с изображением");
+    bar.innerHTML = `
+      <div class="image-context-normal">
+        <button type="button" data-image-action="crop" title="Обрезать изображение">Обрезать</button>
+        <button id="imageCopy" type="button" data-image-action="copy" title="Копировать изображение">Копировать</button>
+        <button type="button" data-image-action="duplicate" title="Создать копию">Дубликат</button>
+        <span class="image-context-separator"></span>
+        <button class="image-context-icon" type="button" data-image-action="back" title="На задний план" aria-label="На задний план">↓</button>
+        <button class="image-context-icon" type="button" data-image-action="front" title="На передний план" aria-label="На передний план">↑</button>
+        <button type="button" data-image-action="reset-crop" title="Вернуть изображение целиком">Сбросить crop</button>
+        <button class="danger image-context-icon" type="button" data-image-action="delete" title="Удалить изображение" aria-label="Удалить изображение">×</button>
+      </div>
+      <div class="image-context-crop hidden">
+        <span class="image-context-label">Кадрирование</span>
+        <button class="primary-action" type="button" data-image-action="apply-crop">Готово</button>
+        <button type="button" data-image-action="cancel-crop">Отмена</button>
+      </div>
+    `;
+    this.canvas.parentElement?.appendChild(bar);
+    bar.addEventListener("pointerdown", (event) => {
+      event.stopPropagation();
+      this.renderer.cancelFollowAnimation?.();
+    });
+    bar.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-image-action]");
+      if (!button) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const action = button.dataset.imageAction;
+      if (action === "crop") this.startCrop();
+      else if (action === "copy") this.copySelectedImage();
+      else if (action === "duplicate") this.duplicateSelectedImage();
+      else if (action === "front") this.reorderSelectedImage("front");
+      else if (action === "back") this.reorderSelectedImage("back");
+      else if (action === "reset-crop") this.resetSelectedCrop();
+      else if (action === "delete") this.deleteSelected();
+      else if (action === "apply-crop") this.applyCrop();
+      else if (action === "cancel-crop") this.cancelCrop();
+    });
+    return bar;
+  }
+
+  syncImageContextBar() {
+    const bar = this.contextBar;
+    if (!bar) return;
+    const image = this.selectedImage();
+    if (!image) {
+      bar.classList.add("hidden");
+      this.stopContextPositionLoop();
+      return;
+    }
+    bar.classList.remove("hidden");
+    bar.querySelector(".image-context-normal")?.classList.toggle("hidden", this.isCropping());
+    bar.querySelector(".image-context-crop")?.classList.toggle("hidden", !this.isCropping());
+    const reset = bar.querySelector('[data-image-action="reset-crop"]');
+    reset?.classList.toggle("hidden", !hasAppliedCrop(image));
+    this.positionImageContextBar();
+    this.startContextPositionLoop();
+  }
+
+  positionImageContextBar() {
+    const bar = this.contextBar;
+    const image = this.selectedImage();
+    if (!bar || !image || bar.classList.contains("hidden")) return;
+    const stage = this.canvas.parentElement;
+    if (!stage) return;
+    const stageRect = stage.getBoundingClientRect();
+    const topLeft = this.renderer.worldToScreen(image);
+    const imageWidth = image.width * this.renderer.view.zoom;
+    const imageHeight = image.height * this.renderer.view.zoom;
+    const barWidth = bar.offsetWidth || 460;
+    const barHeight = bar.offsetHeight || 44;
+    const center = clamp(topLeft.x + imageWidth / 2, barWidth / 2 + 10, stageRect.width - barWidth / 2 - 10);
+    let top = topLeft.y - barHeight - 10;
+    if (top < 68) top = topLeft.y + imageHeight + 10;
+    top = clamp(top, 8, Math.max(8, stageRect.height - barHeight - 8));
+    bar.style.left = `${center}px`;
+    bar.style.top = `${top}px`;
+  }
+
+  startContextPositionLoop() {
+    if (this.contextFrame !== null || typeof requestAnimationFrame !== "function") return;
+    const step = () => {
+      this.contextFrame = null;
+      if (!this.contextBar || this.contextBar.classList.contains("hidden")) return;
+      this.positionImageContextBar();
+      this.contextFrame = requestAnimationFrame(step);
+    };
+    this.contextFrame = requestAnimationFrame(step);
+  }
+
+  stopContextPositionLoop() {
+    if (this.contextFrame !== null && typeof cancelAnimationFrame === "function") cancelAnimationFrame(this.contextFrame);
+    this.contextFrame = null;
+  }
+
+  flashContextAction(id, label) {
+    const button = this.contextBar?.querySelector(`#${id}`);
+    if (!button) return;
+    const previous = button.textContent;
+    button.textContent = label;
+    setTimeout(() => { if (button.isConnected) button.textContent = previous; }, 900);
+  }
+
+  bindClipboard() {
+    if (typeof document === "undefined") return;
+    document.addEventListener("copy", (event) => {
+      if (isEditableTarget(event.target) || !this.selectedImage()) return;
+      this.copySelectedImage({ writeSystemClipboard: false });
+      try {
+        event.clipboardData?.setData("text/plain", CLIPBOARD_MARKER);
+        event.preventDefault();
+      } catch (_) {}
+    });
+    document.addEventListener("paste", (event) => {
+      if (isEditableTarget(event.target) || !this.imageClipboard) return;
+      const imageFiles = [...(event.clipboardData?.files || [])].filter((file) => file.type?.startsWith("image/"));
+      if (imageFiles.length) return;
+      const marker = event.clipboardData?.getData("text/plain") || "";
+      if (marker !== CLIPBOARD_MARKER && !this.imageClipboard) return;
+      event.preventDefault();
+      this.pasteCopiedImage();
+    });
+  }
+
+  writeClipboardMarker() {
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(CLIPBOARD_MARKER).catch(() => this.execCopyFallback());
+      return;
+    }
+    this.execCopyFallback();
+  }
+
+  execCopyFallback() {
+    try {
+      const textarea = document.createElement("textarea");
+      textarea.value = CLIPBOARD_MARKER;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      textarea.remove();
+    } catch (_) {}
+  }
 
   bindKeyboard() {
     document.addEventListener("keydown", (event) => {
-      const target = event.target;
-      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target?.isContentEditable) return;
+      if (isEditableTarget(event.target)) return;
+      const key = event.key.toLowerCase();
       if (event.key === "Escape") {
         if (this.isCropping()) this.cancelCrop();
         else {
@@ -485,9 +776,14 @@ export class SelectionController {
         }
         return;
       }
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
+      if ((event.ctrlKey || event.metaKey) && key === "a") {
         event.preventDefault();
         this.selectAll();
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && key === "d" && this.selectedImage()) {
+        event.preventDefault();
+        this.duplicateSelectedImage();
         return;
       }
       if ((event.key === "Delete" || event.key === "Backspace") && this.hasSelection() && !this.isCropping()) {
@@ -521,6 +817,13 @@ export function composeCropPatch(object, rect) {
   };
 }
 
+function hasAppliedCrop(object) {
+  return Math.abs(Number(object?.crop_x ?? 0)) > 1e-6
+    || Math.abs(Number(object?.crop_y ?? 0)) > 1e-6
+    || Math.abs(Number(object?.crop_width ?? 1) - 1) > 1e-6
+    || Math.abs(Number(object?.crop_height ?? 1) - 1) > 1e-6;
+}
+
 function buttonMask(button) {
   if (button === 0) return 1;
   if (button === 1) return 4;
@@ -528,6 +831,10 @@ function buttonMask(button) {
   if (button === 3) return 8;
   if (button === 4) return 16;
   return 0;
+}
+
+function isEditableTarget(target) {
+  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target?.isContentEditable;
 }
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
