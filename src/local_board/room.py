@@ -189,6 +189,10 @@ class BoardRoom:
                 height=raw["height"],
                 src=raw["src"],
                 name=raw.get("name", "image"),
+                crop_x=raw.get("crop_x", 0.0),
+                crop_y=raw.get("crop_y", 0.0),
+                crop_width=raw.get("crop_width", 1.0),
+                crop_height=raw.get("crop_height", 1.0),
             )
             self.objects[object_id] = board_object
             self.object_order.append(object_id)
@@ -198,7 +202,14 @@ class BoardRoom:
             board_object = self.objects.get(event["object_id"])
             if board_object is None:
                 raise ProtocolError("unknown object")
-            for key, value in event["patch"].items():
+            patch = event["patch"]
+            crop_x = patch.get("crop_x", board_object.crop_x)
+            crop_y = patch.get("crop_y", board_object.crop_y)
+            crop_width = patch.get("crop_width", board_object.crop_width)
+            crop_height = patch.get("crop_height", board_object.crop_height)
+            if crop_x + crop_width > 1.000001 or crop_y + crop_height > 1.000001:
+                raise ProtocolError("invalid object crop")
+            for key, value in patch.items():
                 setattr(board_object, key, value)
             return
 
