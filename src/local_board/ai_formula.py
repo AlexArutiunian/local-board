@@ -10,6 +10,7 @@ OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 # Fast, vision-capable OpenRouter endpoint whose model slug itself is explicitly
 # free. Never silently route formula OCR to a paid model.
 DEFAULT_FORMULA_MODEL = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+LEGACY_PAID_FORMULA_MODELS = {"stealth/ox-alpha"}
 MAX_FORMULA_IMAGE_CHARS = 3_500_000
 MAX_LATEX_CHARS = 4096
 MAX_OUTPUT_TOKENS = 192
@@ -37,8 +38,12 @@ def validate_free_formula_model(model: str) -> str:
     value = str(model or "").strip()
     if not value:
         return DEFAULT_FORMULA_MODEL
+    # We previously documented ox-alpha in .env. Treat that exact legacy value
+    # as a migration signal and replace it locally; never send a paid request.
+    if value in LEGACY_PAID_FORMULA_MODELS:
+        return DEFAULT_FORMULA_MODEL
     # Keep this feature financially fail-closed. An explicit :free model is the
-    # only accepted override; a typo can never fall through to a paid endpoint.
+    # only accepted custom override; a typo can never fall through to paid use.
     if not value.endswith(":free"):
         raise FormulaRecognitionError(
             "OPENROUTER_FORMULA_MODEL must be an explicit :free model"
