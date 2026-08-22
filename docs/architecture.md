@@ -11,7 +11,7 @@
 ```text
 Dashboard / → explicit room
 → participants join /b/<code>
-→ local optimistic Pencil/object interaction
+→ local optimistic ink/object interaction
 → validated realtime mutation
 → authoritative BoardRoom
 → event to peers
@@ -61,27 +61,40 @@ POST /api/boards/<room>/assets
 and the shared object contains only same-room metadata:
 
 ```text
-{id, kind:"image", x, y, width, height, src, name}
+{
+  id,
+  kind:"image",
+  x, y, width, height,
+  src, name,
+  crop_x, crop_y, crop_width, crop_height
+}
 ```
+
+Crop values are normalized fractions of the original asset. Cropping is therefore non-destructive: the original bytes remain untouched and only object metadata changes.
 
 Assets live under `~/.local/share/local-board/assets/<room>/`. The server rejects cross-room image references in `object.create`.
 
 ## Frontend responsibilities
 
-### Pencil/input
+### Ink/input
 
 - native Canvas 2D; no whiteboard framework dependency;
-- dedicated `PencilEngine` keeps ink independent of mouse/touch navigation;
-- normal path `pointerdown → pointermove* → pointerup` plus WebKit recovery from contact-bearing `pointermove` and stylus `TouchEvent` fallback;
+- dedicated `PencilEngine` owns the active freehand stroke independently of navigation logic;
+- default input remains conservative: Apple Pencil draws, one finger pans, two fingers pinch, mouse pans;
+- normal Pencil path is `pointerdown → pointermove* → pointerup` plus WebKit recovery from contact-bearing `pointermove` and stylus `TouchEvent` fallback;
 - Pencil ink has no debounce/cooldown and no synchronous persistence in the hot path;
 - coalesced samples render locally before network transport;
-- touch/palm never creates ink; one finger pans, two fingers pinch;
-- eraser is a separate tool and can be operated by Pencil or mouse; it deletes whole ink strokes;
+- a separate local `directInkEnabled` preference may deliberately route Pen-tool mouse/touch contacts into `PencilEngine` with `pointer_type` equal to `mouse` or `touch`;
+- direct ink is **off by default** and stored per browser, so enabling it for a student does not alter other participants;
+- with direct ink enabled, Pen + LMB/one finger draws and Eraser + one finger can erase; selecting Pan still routes mouse/touch to navigation;
+- two-finger pinch remains available in direct-ink mode: when a second touch arrives, any transient first-finger ink is cancelled and the contacts are converted to the ordinary pinch gesture;
+- Apple Pencil retains priority over finger/palm input even when direct ink is enabled;
+- eraser deletes whole ink strokes and is undoable through the local history controller;
 - Safari selection/callout/drag/gesture handling is suppressed on the board surface.
 
 ### Selection/object editing
 
-`SelectionController` owns local selection state; selection itself is **not shared room state**.
+`SelectionController` owns local selection and crop interaction state; neither selection outlines nor an in-progress crop frame are shared room state.
 
 Supported interactions:
 
@@ -90,13 +103,15 @@ Supported interactions:
 - drag marquee;
 - `Shift` additive selection;
 - `Ctrl/Cmd+A` select all;
-- `Esc` clear selection;
+- `Esc` clear selection / cancel crop;
 - `Delete/Backspace` deletes selected strokes/images;
 - `Ctrl/Cmd + drag` temporarily routes input to Select without changing the active tool;
+- held RMB drag is a temporary marquee gesture independent of the selected tool;
 - selected strokes and image objects can move;
-- a single selected image can resize from its corner while preserving aspect ratio.
+- a single selected image can resize from its corner while preserving aspect ratio;
+- a single selected image can enter crop mode: eight crop handles + draggable crop area, then explicit Apply/Cancel.
 
-Transforms are committed as semantic realtime mutations (`stroke.translate`, `object.update`) rather than retransmitting every historical point/image byte.
+Transforms are committed as semantic realtime mutations (`stroke.translate`, `object.update`) rather than retransmitting historical points/image bytes. Applying crop commits geometry plus normalized `crop_*` values in one `object.update`, so peers and reconnect snapshots render the same crop.
 
 ### Images
 
@@ -107,14 +122,16 @@ Transforms are committed as semantic realtime mutations (`stroke.translate`, `ob
 - paste from clipboard;
 - PNG/JPEG/WEBP/GIF up to the current server limit;
 - upload first, then `object.create` with same-origin asset URL;
-- image bytes are fetched/cached independently by `ImageCache`.
+- image bytes are fetched/cached independently by `ImageCache`;
+- `CanvasRenderer` uses the 9-argument Canvas `drawImage` form to display the selected source crop inside the board object's destination rectangle.
 
 ### Rendering
 
 - completed ink + image objects are cached into a bitmap base layer;
-- only active ink and selection overlays are repainted every display frame;
+- only active ink and local interaction overlays are repainted every display frame;
 - image cache invalidates the base only when an image finishes loading;
-- PNG export suppresses local selection/marquee overlays;
+- selection, marquee and crop overlays are local-only;
+- PNG export suppresses local interaction overlays;
 - viewport (`x/y/zoom`) remains local per browser.
 
 ## Camera assistance
@@ -165,7 +182,7 @@ Every mutation carries `op_id`; retries are deduplicated server-side. Structural
 
 Override the root with `LOCAL_BOARD_DATA_DIR`.
 
-JSON + filesystem assets intentionally fit the current single-process phase. Persistence, room state and transport are separated so a future internet deployment can replace storage without rewriting Pencil/selection/rendering logic.
+JSON + filesystem assets intentionally fit the current single-process phase. Persistence, room state and transport are separated so a future internet deployment can replace storage without rewriting input/selection/rendering logic.
 
 ## Deployment boundary
 
@@ -182,7 +199,7 @@ JSON + filesystem assets intentionally fit the current single-process phase. Per
 ```text
 Browsers
   ↓ HTTPS / WSS
-Reverse proxy / TLS
+Reverse proxy / TLS or outbound tunnel
   ↓
 one Local Board process
   ↓
@@ -206,6 +223,6 @@ CRDT remains optional and should be introduced only when richer concurrent objec
 - rich text/sticky notes/connectors/PDF-page objects;
 - lesson scheduling/history product layer.
 
-Images and basic object selection are now part of the implemented board model; richer object types can extend the same protocol/state seams later.
+Images, non-destructive crop and basic object selection are now part of the implemented board model; richer object types can extend the same protocol/state seams later.
 
 See [`deployment.md`](deployment.md) for the staged deployment plan.
