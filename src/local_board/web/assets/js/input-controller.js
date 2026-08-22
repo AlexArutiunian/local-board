@@ -2,85 +2,48 @@ import { createId } from "./id.js";
 import { PencilEngine, isContactEvent } from "./pencil-engine.js";
 
 export class InputController {
-  constructor({ canvas, state, renderer, sendEvent, clientId, onStrokeFinished }) {
+  constructor({ canvas, state, renderer, sendEvent, clientId, onStrokeFinished, selection = null }) {
     this.canvas = canvas;
     this.state = state;
     this.renderer = renderer;
     this.sendEvent = sendEvent;
     this.clientId = clientId;
+    this.selection = selection;
 
     this.tool = "pen";
     this.color = "#111111";
     this.width = 4;
 
-    this.pencil = new PencilEngine({
-      state,
-      renderer,
-      sendEvent,
-      clientId,
-      onStrokeFinished,
-    });
+    this.pencil = new PencilEngine({ state, renderer, sendEvent, clientId, onStrokeFinished });
 
     this.stylusPointerId = null;
     this.stylusMode = null;
     this.mousePointerId = null;
+    this.mouseMode = null;
     this.touchPointers = new Map();
     this.panAnchor = null;
     this.pinchAnchor = null;
     this.erasedThisGesture = new Set();
 
-    // Safari fallback path. Pointer Events remain primary, but WebKit has had
-    // regressions where a fast second pointerdown is omitted. Touch.touchType
-    // lets iPad Safari identify Apple Pencil independently of finger touches.
     this.pendingStylusTouch = null;
     this.stylusFallbackTimer = null;
-
     this.bind();
   }
 
   bind() {
     this.canvas.addEventListener("pointerdown", (event) => this.onPointerDown(event), { passive: false });
+    window.addEventListener("pointermove", (event) => this.onPointerMove(event), { capture: true, passive: false });
+    window.addEventListener("pointerup", (event) => this.onPointerEnd(event), { capture: true, passive: false });
+    window.addEventListener("pointercancel", (event) => this.onPointerEnd(event), { capture: true, passive: false });
 
-    // Window-level terminal listeners make cleanup independent of event target.
-    window.addEventListener("pointermove", (event) => this.onPointerMove(event), {
-      capture: true,
-      passive: false,
-    });
-    window.addEventListener("pointerup", (event) => this.onPointerEnd(event), {
-      capture: true,
-      passive: false,
-    });
-    window.addEventListener("pointercancel", (event) => this.onPointerEnd(event), {
-      capture: true,
-      passive: false,
-    });
-
-    // Secondary Apple Pencil signal on Safari. It is used only if Pointer Events
-    // failed to establish/finish a stylus contact, so normal input is not doubled.
-    this.canvas.addEventListener("touchstart", (event) => this.onStylusTouchStart(event), {
-      passive: false,
-    });
-    window.addEventListener("touchmove", (event) => this.onStylusTouchMove(event), {
-      capture: true,
-      passive: false,
-    });
-    window.addEventListener("touchend", (event) => this.onStylusTouchEnd(event), {
-      capture: true,
-      passive: false,
-    });
-    window.addEventListener("touchcancel", (event) => this.onStylusTouchEnd(event), {
-      capture: true,
-      passive: false,
-    });
+    this.canvas.addEventListener("touchstart", (event) => this.onStylusTouchStart(event), { passive: false });
+    window.addEventListener("touchmove", (event) => this.onStylusTouchMove(event), { capture: true, passive: false });
+    window.addEventListener("touchend", (event) => this.onStylusTouchEnd(event), { capture: true, passive: false });
+    window.addEventListener("touchcancel", (event) => this.onStylusTouchEnd(event), { capture: true, passive: false });
 
     this.canvas.addEventListener("wheel", (event) => this.onWheel(event), { passive: false });
-
-    for (const type of ["selectstart", "dragstart", "contextmenu"]) {
-      this.canvas.addEventListener(type, (event) => event.preventDefault());
-    }
-    for (const type of ["gesturestart", "gesturechange", "gestureend"]) {
-      this.canvas.addEventListener(type, (event) => event.preventDefault(), { passive: false });
-    }
+    for (const type of ["selectstart", "dragstart", "contextmenu"]) this.canvas.addEventListener(type, (event) => event.preventDefault());
+    for (const type of ["gesturestart", "gesturechange", "gestureend"]) this.canvas.addEventListener(type, (event) => event.preventDefault(), { passive: false });
 
     window.addEventListener("blur", () => this.interruptInput());
     document.addEventListener("visibilitychange", () => {
@@ -90,25 +53,44 @@ export class InputController {
 
   setTool(tool) {
     this.tool = tool;
-    this.canvas.style.cursor = tool === "pan" ? "grab" : tool === "eraser" ? "cell" : "crosshair";
+    if (tool === "pan") this.canvas.style.cursor = "grab";
+    else if (tool === "eraser") this.canvas.style.cursor = "cell";
+    else if (tool === "select") this.canvas.style.cursor = "default";
+    else this.canvas.style.cursor = "crosshair";
   }
 
   setColor(color) { this.color = color; }
   setWidth(width) { this.width = Number(width); }
 
+  shouldSelect(event) {
+    return Boolean(this.selection)
+      && event.pointerType !== "touch"
+      && (this.tool === "select" || event.ctrlKey || event.metaKey);
+  }
+
   onPointerDown(event) {
     preventDefault(event);
     this.clearBrowserSelection();
 
+    if (this.shouldSelect(event)) {
+      this.cancelStylusFallback();
+      this.cancelTouchGesture();
+      this.endMouseInteraction();
+      this.pencil.interrupt();
+      this.finishNonInkStylus();
+      this.selection.pointerDown(event);
+      return;
+    }
+
     if (event.pointerType === "pen") {
       this.cancelStylusFallback();
       this.cancelTouchGesture();
-      this.endMousePan();
+      this.endMouseInteraction();
       this.finishNonInkStylus();
 
       if (this.tool === "pen") {
         this.pencil.begin(event, { color: this.color, width: this.width });
-      } else {
+      } else if (this.tool === "eraser" || this.tool === "pan") {
         this.pencil.interrupt();
         this.startNonInkStylus(event.pointerId, this.tool, event.clientX, event.clientY);
       }
@@ -122,34 +104,44 @@ export class InputController {
       return;
     }
 
-    // Mouse/trackpad are navigation-only.
     if (this.isStylusActive()) return;
     if (event.button !== undefined && event.button !== 0) return;
     this.mousePointerId = event.pointerId;
-    this.panAnchor = { x: event.clientX, y: event.clientY };
+    if (this.tool === "eraser") {
+      this.mouseMode = "eraser";
+      this.erasedThisGesture.clear();
+      this.eraseAt(event.clientX, event.clientY);
+    } else {
+      this.mouseMode = "pan";
+      this.panAnchor = { x: event.clientX, y: event.clientY };
+    }
   }
 
   onPointerMove(event) {
-    // Existing Pencil session: pointerId, not later pointerType metadata, is authoritative.
+    if (this.selection?.ownsPointer(event.pointerId)) {
+      preventDefault(event);
+      this.selection.pointerMove(event);
+      return;
+    }
+
     if (this.pencil.ownsPointer(event.pointerId)) {
       preventDefault(event);
       this.pencil.move(event);
       return;
     }
 
-    // Critical WebKit recovery: a fast second contact can arrive as a pen move with
-    // pressure/buttons even when pointerdown was omitted. Treat contact state itself
-    // as sufficient evidence to begin a new stroke immediately.
     if (event.pointerType === "pen" && isContactEvent(event)) {
       preventDefault(event);
       this.cancelStylusFallback();
       this.cancelTouchGesture();
-      this.endMousePan();
+      this.endMouseInteraction();
       this.finishNonInkStylus();
 
-      if (this.tool === "pen") {
+      if (this.tool === "select" && this.selection) {
+        this.selection.pointerDown(event);
+      } else if (this.tool === "pen") {
         this.pencil.recover(event, { color: this.color, width: this.width });
-      } else {
+      } else if (this.tool === "eraser" || this.tool === "pan") {
         this.pencil.interrupt();
         this.startNonInkStylus(event.pointerId, this.tool, event.clientX, event.clientY);
       }
@@ -177,11 +169,18 @@ export class InputController {
 
     if (this.mousePointerId === event.pointerId) {
       preventDefault(event);
-      this.movePan(event.clientX, event.clientY);
+      if (this.mouseMode === "eraser") this.eraseAt(event.clientX, event.clientY);
+      else this.movePan(event.clientX, event.clientY);
     }
   }
 
   onPointerEnd(event) {
+    if (this.selection?.ownsPointer(event.pointerId)) {
+      preventDefault(event);
+      this.selection.pointerUp(event);
+      return;
+    }
+
     if (this.pencil.ownsPointer(event.pointerId)) {
       preventDefault(event);
       this.pencil.end(event.pointerId);
@@ -206,8 +205,9 @@ export class InputController {
 
     if (this.mousePointerId === event.pointerId) {
       preventDefault(event);
-      this.endMousePan();
-      this.renderer.saveView();
+      const shouldSaveView = this.mouseMode === "pan";
+      this.endMouseInteraction();
+      if (shouldSaveView) this.renderer.saveView();
     }
   }
 
@@ -215,9 +215,6 @@ export class InputController {
     const touch = findStylusTouch(event.changedTouches);
     if (!touch) return;
     preventDefault(event);
-
-    // Usually pointerdown will handle this contact. Give it the current task first;
-    // if WebKit omits pointerdown, start from Touch Events on the next macrotask.
     this.pendingStylusTouch = snapshotTouch(touch);
     this.cancelStylusFallbackTimer();
     this.stylusFallbackTimer = setTimeout(() => {
@@ -232,11 +229,13 @@ export class InputController {
     const touch = findStylusTouch(event.changedTouches) || findStylusTouch(event.touches);
     if (!touch) return;
     preventDefault(event);
-
     const adapted = touchToPointerLike(touch);
     const key = adapted.pointerId;
 
-    // Pointer Events already own this Pencil contact: ignore the duplicate TouchEvent.
+    if (this.selection?.ownsPointer(key)) {
+      this.selection.pointerMove(adapted);
+      return;
+    }
     if (this.pencil.isActive() && !this.pencil.ownsPointer(key)) return;
     if (this.stylusPointerId !== null && this.stylusPointerId !== key) return;
 
@@ -247,14 +246,11 @@ export class InputController {
       this.pencil.move(adapted);
       return;
     }
-
     if (this.stylusPointerId === key) {
       if (this.stylusMode === "eraser") this.eraseAt(touch.clientX, touch.clientY);
       else if (this.stylusMode === "pan") this.movePan(touch.clientX, touch.clientY);
       return;
     }
-
-    // No PointerEvent contact exists at all: reconstruct from stylus touchmove.
     this.beginStylusTouchFallback(this.pendingStylusTouch);
   }
 
@@ -262,11 +258,14 @@ export class InputController {
     const touch = findStylusTouch(event.changedTouches);
     if (!touch) return;
     preventDefault(event);
-
     this.cancelStylusFallbackTimer();
     this.pendingStylusTouch = null;
     const key = touchKey(touch.identifier);
 
+    if (this.selection?.ownsPointer(key)) {
+      this.selection.pointerUp(touchToPointerLike(touch));
+      return;
+    }
     if (this.pencil.ownsPointer(key)) {
       this.pencil.end(key);
       return;
@@ -277,27 +276,21 @@ export class InputController {
       if (shouldSaveView) this.renderer.saveView();
       return;
     }
-
-    // Secondary terminal signal: if WebKit lost pointerup, stylus touchend still
-    // releases any pointer-based Pencil session so the next contact cannot be blocked.
     if (this.pencil.isActive()) this.pencil.interrupt();
   }
 
   beginStylusTouchFallback(touchSnapshot) {
     if (!touchSnapshot || this.isStylusActive()) return;
     this.cancelTouchGesture();
-    this.endMousePan();
+    this.endMouseInteraction();
     const adapted = touchToPointerLike(touchSnapshot);
 
-    if (this.tool === "pen") {
+    if (this.tool === "select" && this.selection) {
+      this.selection.pointerDown(adapted);
+    } else if (this.tool === "pen") {
       this.pencil.recover(adapted, { color: this.color, width: this.width });
-    } else {
-      this.startNonInkStylus(
-        adapted.pointerId,
-        this.tool,
-        adapted.clientX,
-        adapted.clientY,
-      );
+    } else if (this.tool === "eraser" || this.tool === "pan") {
+      this.startNonInkStylus(adapted.pointerId, this.tool, adapted.clientX, adapted.clientY);
     }
   }
 
@@ -310,7 +303,7 @@ export class InputController {
   }
 
   isStylusActive() {
-    return this.pencil.isActive() || this.stylusPointerId !== null;
+    return this.pencil.isActive() || this.stylusPointerId !== null || Boolean(this.selection?.activePointerId !== null && this.selection?.activePointerId !== undefined);
   }
 
   finishNonInkStylus() {
@@ -320,8 +313,10 @@ export class InputController {
     this.panAnchor = null;
   }
 
-  endMousePan() {
+  endMouseInteraction() {
     this.mousePointerId = null;
+    this.mouseMode = null;
+    this.erasedThisGesture.clear();
     if (!this.touchPointers.size) this.panAnchor = null;
   }
 
@@ -332,10 +327,7 @@ export class InputController {
       this.pinchAnchor = null;
     } else if (this.touchPointers.size >= 2) {
       const [a, b] = [...this.touchPointers.values()];
-      this.pinchAnchor = {
-        distance: distance(a, b),
-        zoom: this.renderer.view.zoom,
-      };
+      this.pinchAnchor = { distance: distance(a, b), zoom: this.renderer.view.zoom };
       this.panAnchor = null;
     }
   }
@@ -347,14 +339,11 @@ export class InputController {
       this.movePan(point.x, point.y);
       return;
     }
-
     if (this.touchPointers.size >= 2) {
       const [a, b] = [...this.touchPointers.values()];
       const center = midpoint(a, b);
       const currentDistance = distance(a, b);
-      if (!this.pinchAnchor) {
-        this.pinchAnchor = { distance: currentDistance, zoom: this.renderer.view.zoom };
-      }
+      if (!this.pinchAnchor) this.pinchAnchor = { distance: currentDistance, zoom: this.renderer.view.zoom };
       const newZoom = this.pinchAnchor.zoom * (currentDistance / Math.max(1, this.pinchAnchor.distance));
       this.renderer.zoomAt(center.x, center.y, newZoom);
     }
@@ -396,17 +385,17 @@ export class InputController {
 
   interruptInput() {
     const hadNavigation = this.touchPointers.size > 0
-      || this.mousePointerId !== null
+      || (this.mousePointerId !== null && this.mouseMode === "pan")
       || (this.stylusPointerId !== null && this.stylusMode === "pan");
-
     this.cancelStylusFallback();
     this.pencil.interrupt();
+    this.selection?.cancelPointer();
     this.finishNonInkStylus();
     this.touchPointers.clear();
     this.mousePointerId = null;
+    this.mouseMode = null;
     this.panAnchor = null;
     this.pinchAnchor = null;
-
     if (hadNavigation) this.renderer.saveView();
   }
 
@@ -419,54 +408,29 @@ export class InputController {
 
   eraseAt(clientX, clientY) {
     const point = this.renderer.screenToWorld(clientX, clientY);
-    const hit = findClosestStroke(
-      this.state.listStrokes(),
-      point,
-      18 / this.renderer.view.zoom,
-      this.erasedThisGesture,
-    );
+    const hit = findClosestStroke(this.state.listStrokes(), point, 18 / this.renderer.view.zoom, this.erasedThisGesture);
     if (!hit) return;
-
     this.erasedThisGesture.add(hit.id);
-    const mutation = {
-      type: "stroke.delete",
-      op_id: createId(),
-      stroke_id: hit.id,
-    };
+    const mutation = { type: "stroke.delete", op_id: createId(), stroke_id: hit.id };
     this.state.applyEvent(mutation, null, this.clientId);
     this.sendEvent(mutation);
     this.renderer.requestRender();
   }
 
   clearBrowserSelection() {
-    try {
-      window.getSelection?.()?.removeAllRanges();
-    } catch (_) {}
+    try { window.getSelection?.()?.removeAllRanges(); } catch (_) {}
   }
 }
 
-function preventDefault(event) {
-  if (event.cancelable) event.preventDefault();
-}
-
+function preventDefault(event) { if (event.cancelable) event.preventDefault(); }
 function findStylusTouch(touchList) {
   if (!touchList) return null;
-  for (const touch of Array.from(touchList)) {
-    if (touch.touchType === "stylus") return touch;
-  }
+  for (const touch of Array.from(touchList)) if (touch.touchType === "stylus") return touch;
   return null;
 }
-
 function snapshotTouch(touch) {
-  return {
-    identifier: touch.identifier,
-    clientX: touch.clientX,
-    clientY: touch.clientY,
-    force: Number(touch.force || 0.45),
-    touchType: "stylus",
-  };
+  return { identifier: touch.identifier, clientX: touch.clientX, clientY: touch.clientY, force: Number(touch.force || 0.45), touchType: "stylus" };
 }
-
 function touchToPointerLike(touch) {
   return {
     pointerId: touchKey(touch.identifier),
@@ -478,10 +442,7 @@ function touchToPointerLike(touch) {
     buttons: 1,
   };
 }
-
-function touchKey(identifier) {
-  return `stylus-touch:${identifier}`;
-}
+function touchKey(identifier) { return `stylus-touch:${identifier}`; }
 
 function findClosestStroke(strokes, point, radius, ignored) {
   let best = null;
@@ -491,16 +452,11 @@ function findClosestStroke(strokes, point, radius, ignored) {
     if (ignored.has(stroke.id)) continue;
     const points = stroke.points || [];
     if (!points.length) continue;
-
     let distanceToStroke = Infinity;
-    if (points.length === 1) {
-      distanceToStroke = Math.hypot(point.x - points[0].x, point.y - points[0].y);
-    } else {
-      for (let j = 0; j < points.length - 1; j += 1) {
-        distanceToStroke = Math.min(distanceToStroke, pointToSegment(point, points[j], points[j + 1]));
-      }
+    if (points.length === 1) distanceToStroke = Math.hypot(point.x - points[0].x, point.y - points[0].y);
+    else {
+      for (let j = 0; j < points.length - 1; j += 1) distanceToStroke = Math.min(distanceToStroke, pointToSegment(point, points[j], points[j + 1]));
     }
-
     if (distanceToStroke < bestDistance) {
       bestDistance = distanceToStroke;
       best = stroke;
@@ -521,11 +477,5 @@ function pointToSegment(point, a, b) {
   const t = c1 / c2;
   return Math.hypot(point.x - (a.x + t * vx), point.y - (a.y + t * vy));
 }
-
-function midpoint(a, b) {
-  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-}
-
-function distance(a, b) {
-  return Math.hypot(a.x - b.x, a.y - b.y);
-}
+function midpoint(a, b) { return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; }
+function distance(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
