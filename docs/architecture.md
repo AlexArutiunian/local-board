@@ -2,23 +2,24 @@
 
 ## Goal
 
-`local-board` — room-based realtime-доска для занятий. Преподаватель создаёт комнату, отправляет ссылку или сообщает 4-значный код ученику, и все участники комнаты видят общий canvas во время рисования.
+`local-board` — room-based realtime-доска для совместных занятий и работы. Один участник создаёт комнату, делится ссылкой или 4-значным кодом, и все участники комнаты видят общий canvas во время рисования.
 
 Текущий способ запуска — один Linux-хост в LAN. При этом приложение намеренно **host-agnostic**: frontend использует same-origin HTTP/WebSocket URLs и не знает, работает ли он на `192.168.x.x`, `localhost` или будущем HTTPS-домене.
 
 Главный сценарий:
 
 ```text
-teacher creates room
+participant creates room
 → server persists room identity
-→ teacher shares /b/<4-digit-code>
-→ student opens the same URL or enters the code
-→ both connect to the same BoardRoom
+→ room link / 4-digit code is shared
+→ other participants open the same room
+→ everyone connects to the same BoardRoom
 → Pencil stroke renders locally immediately
 → append points are batched for network transport
 → mutation travels over WebSocket
 → server applies authoritative state
 → other participants render it live
+→ passive viewers smoothly keep the active remote writer in view when needed
 → durable snapshot is persisted
 ```
 
@@ -32,7 +33,7 @@ flowchart LR
 
     I[iPad / Apple Pencil] <-->|WebSocket| S[Realtime server]
     L[Laptop browser] <-->|WebSocket| S
-    O[Student browser] <-->|WebSocket| S
+    O[Another participant] <-->|WebSocket| S
     S --> M[BoardRoom in memory]
     M --> J
 ```
@@ -68,9 +69,16 @@ A four-digit code is deliberately optimized for classroom UX, not security. It i
 - Safari text selection, touch callout, drag, context menu and browser gesture handling are suppressed on the board surface;
 - coalesced Pencil samples are applied to local state immediately when available;
 - rendering is scheduled at most once per animation frame;
+- completed strokes are cached in a bitmap layer while only active strokes are repainted on realtime append frames;
 - outgoing `stroke.append` points are batched once per animation frame in bounded chunks and flushed before `stroke.end`;
 - realtime transport is downstream of local rendering and must never gate whether a Pencil contact is accepted;
-- viewport (`x/y/zoom`) is local per browser and is never synchronized;
+- viewport (`x/y/zoom`) remains local per browser and is never synchronized over the network;
+- `RemoteFollowController` derives the current remote writer position from normal `stroke.begin` / `stroke.append` events, so no separate camera protocol is required;
+- when the remote stroke head approaches or leaves a safe inset of the local viewport, only that viewer's camera pans smoothly enough to reveal additional writing space;
+- bottom safe inset is larger because the floating toolbar occupies visible canvas space;
+- local writing, pan, pinch, wheel, or deliberate toolbar/view interaction immediately cancels remote camera motion and pauses auto-follow for a short grace period;
+- auto-follow is role-neutral: any participant can become the active writer and any other passive participant can follow;
+- simultaneous writers do not make a viewer ping-pong on every packet: the current active stroke keeps focus until a new explicit `stroke.begin` or the previous writer becomes stale;
 - API requests use relative same-origin paths;
 - WebSocket derives `ws://` / `wss://` from `location.protocol`;
 - share links use `location.origin`, so no host/IP is hardcoded.
@@ -157,7 +165,7 @@ Important: while `BoardRoom` state is process-local, run **one application worke
 Before exposing the service publicly, add at minimum:
 
 - HTTPS/WSS;
-- teacher ownership and participant permissions;
+- ownership and participant permissions appropriate for the product;
 - a real authentication/invite credential independent of the 4-digit room code;
 - rate limits for room creation and WebSocket traffic;
 - WebSocket Origin/Host policy;
@@ -178,7 +186,7 @@ CRDT should only be introduced when richer concurrent object editing actually re
 
 ## Deliberate non-goals for the current version
 
-- teacher/student roles;
+- fixed teacher/student behavior inside the drawing engine;
 - accounts/authentication;
 - public internet hardening;
 - multi-process horizontal scaling;
