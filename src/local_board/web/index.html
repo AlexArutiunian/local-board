@@ -35,10 +35,13 @@
           <button class="tool icon-button" data-tool="select" title="Выделение (V). Ctrl/Cmd + drag работает из любого режима" aria-label="Выделение">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 3 13 9-6 1.5L9 20 5 3Z"/></svg>
           </button>
-          <button class="tool icon-button active" data-tool="pen" title="Ручка — рисует только Apple Pencil" aria-label="Ручка">
+          <button class="tool icon-button active" data-tool="pen" title="Ручка" aria-label="Ручка">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l4.3-1 10.8-10.8a2.15 2.15 0 0 0 0-3L18.8 4.9a2.15 2.15 0 0 0-3 0L5 15.7 4 20Z"/><path d="m14.8 5.9 3.3 3.3"/></svg>
           </button>
-          <button class="tool icon-button" data-tool="eraser" title="Ластик — Pencil или мышь" aria-label="Ластик">
+          <button id="directInk" class="icon-button toggle-button" title="Разрешить рисование мышью и пальцем" aria-label="Рисование мышью и пальцем" aria-pressed="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 12.5V8.2a1.45 1.45 0 0 1 2.9 0v3.2"/><path d="M10.9 11.4V6.6a1.45 1.45 0 0 1 2.9 0v4.8"/><path d="M13.8 11.4V7.7a1.45 1.45 0 0 1 2.9 0v4.1"/><path d="M16.7 11.8v-2a1.45 1.45 0 0 1 2.9 0v4.1c0 4.4-2.7 7.1-6.5 7.1h-1c-2 0-3.5-.8-4.6-2.3l-2.6-3.5a1.5 1.5 0 0 1 2.3-1.9l1.6 1.5"/><path d="M4 5.5h3M5.5 4v3"/></svg>
+          </button>
+          <button class="tool icon-button" data-tool="eraser" title="Ластик — Pencil, мышь; палец в режиме рисования мышью/пальцем" aria-label="Ластик">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7.2 18.5-3.1-3.1a2 2 0 0 1 0-2.8l7.7-7.7a2 2 0 0 1 2.8 0l5.3 5.3a2 2 0 0 1 0 2.8l-5.5 5.5H7.2Z"/><path d="m9.2 7.5 7.3 7.3"/><path d="M7.2 18.5H20"/></svg>
           </button>
           <button class="tool icon-button" data-tool="pan" title="Перемещение" aria-label="Перемещение">
@@ -46,6 +49,15 @@
           </button>
           <button id="imageInsert" class="icon-button" title="Добавить изображение (можно также вставить или перетащить)" aria-label="Добавить изображение">
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="9" r="1.5"/><path d="m4 17 4.5-4.5 3.5 3 2.5-2.5 5.5 5"/></svg>
+          </button>
+          <button id="cropSelection" class="icon-button selection-context hidden" title="Кадрировать выбранное изображение" aria-label="Кадрировать изображение">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v14a2 2 0 0 0 2 2h12"/><path d="M3 7h14a2 2 0 0 1 2 2v12"/></svg>
+          </button>
+          <button id="cropApply" class="icon-button crop-action hidden" title="Применить кадрирование" aria-label="Применить кадрирование">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4 10-10"/></svg>
+          </button>
+          <button id="cropCancel" class="icon-button crop-action hidden" title="Отменить кадрирование" aria-label="Отменить кадрирование">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
           </button>
           <button id="deleteSelection" class="icon-button selection-action hidden" title="Удалить выделенное" aria-label="Удалить выделенное">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg>
