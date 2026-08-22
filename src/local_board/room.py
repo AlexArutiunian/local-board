@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 from collections import deque
 from typing import Any
 
@@ -9,6 +11,9 @@ from fastapi import WebSocket
 from .models import BoardObject, Stroke
 from .protocol import MAX_POINTS_PER_STROKE, ProtocolError, normalize_background
 from .storage import JsonBoardStore
+
+logger = logging.getLogger(__name__)
+MAX_ACTIVE_STROKE_TIMERS = 2048
 
 
 class BoardRoom:
@@ -36,6 +41,7 @@ class BoardRoom:
 
         self.clients: dict[str, WebSocket] = {}
         self.client_profiles: dict[str, dict[str, str]] = {}
+        self._stroke_started_ms: dict[str, int] = {}
         self._state_lock = asyncio.Lock()
         self._persist_lock = asyncio.Lock()
         self._recent_op_order: deque[str] = deque(maxlen=10_000)
@@ -74,6 +80,14 @@ class BoardRoom:
     async def connect(self, client_id: str, websocket: WebSocket, profile: dict[str, str]) -> None:
         self.clients[client_id] = websocket
         self.client_profiles[client_id] = dict(profile)
+        await self._log_activity(
+            {
+                "v": 1,
+                "t": now_ms(),
+                "k": "join",
+                "actor": self._actor(client_id),
+            }
+        )
         presence = self.presence_payload()
         await websocket.send_json(
             {
@@ -89,8 +103,10 @@ class BoardRoom:
         current = self.clients.get(client_id)
         if current is not websocket:
             return
+        actor = self._actor(client_id)
         self.clients.pop(client_id, None)
         self.client_profiles.pop(client_id, None)
+        await self._log_activity({"v": 1, "t": now_ms(), "k": "leave", "actor": actor})
         await self.persist()
         await self.broadcast_presence()
 
@@ -104,6 +120,8 @@ class BoardRoom:
                 await websocket.send_json({"type": "pong"})
             return
 
+        activity: dict[str, Any] | None = None
+        event_time = now_ms()
         async with self._state_lock:
             op_id = event["op_id"]
             duplicate_revision = self._recent_ops.get(op_id)
@@ -111,10 +129,15 @@ class BoardRoom:
                 await self._ack(client_id, op_id, duplicate_revision)
                 return
 
+            before = self._activity_before(event)
             self._apply_mutation(client_id, event)
             self.revision += 1
             revision = self.revision
             self._remember_op(op_id, revision)
+            activity = self._activity_for_event(client_id, event, revision, event_time, before)
+
+        if activity is not None:
+            await self._log_activity(activity)
 
         await self._ack(client_id, op_id, revision)
         await self._broadcast(
@@ -260,9 +283,132 @@ class BoardRoom:
             self.order.clear()
             self.objects.clear()
             self.object_order.clear()
+            self._stroke_started_ms.clear()
             return
 
         raise ProtocolError("unsupported mutation")
+
+    def _activity_before(self, event: dict[str, Any]) -> dict[str, Any]:
+        event_type = event["type"]
+        if event_type in {"stroke.end", "stroke.delete", "stroke.translate"}:
+            stroke = self.strokes.get(event.get("stroke_id"))
+            return {"stroke": stroke} if stroke is not None else {}
+        if event_type == "object.delete":
+            board_object = self.objects.get(event.get("object_id"))
+            return {"object": board_object} if board_object is not None else {}
+        if event_type == "board.clear":
+            return {"strokes": len(self.strokes), "objects": len(self.objects)}
+        return {}
+
+    def _activity_for_event(
+        self,
+        client_id: str,
+        event: dict[str, Any],
+        revision: int,
+        timestamp_ms: int,
+        before: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        event_type = event["type"]
+        actor = self._actor(client_id)
+        base = {"v": 1, "t": timestamp_ms, "k": event_type, "rev": revision, "actor": actor}
+
+        if event_type == "stroke.begin":
+            stroke_id = event["stroke"]["id"]
+            self._remember_stroke_start(stroke_id, timestamp_ms)
+            return None
+
+        if event_type == "stroke.append":
+            return None
+
+        if event_type == "stroke.end":
+            stroke = before.get("stroke") or self.strokes.get(event["stroke_id"])
+            start_ms = self._stroke_started_ms.pop(event["stroke_id"], timestamp_ms)
+            if stroke is None:
+                return None
+            return {
+                **base,
+                "k": "stroke",
+                "sid": stroke.id,
+                "t0": start_ms,
+                "ms": max(0, timestamp_ms - start_ms),
+                **stroke_activity_summary(stroke),
+            }
+
+        if event_type == "stroke.delete":
+            stroke = before.get("stroke")
+            self._stroke_started_ms.pop(event["stroke_id"], None)
+            record = {**base, "sid": event["stroke_id"]}
+            if stroke is not None:
+                record["target_author"] = stroke.author_id
+                record["complete"] = bool(stroke.complete)
+                record.update(stroke_activity_summary(stroke))
+            return record
+
+        if event_type == "stroke.restore":
+            stroke = self.strokes.get(event["stroke"]["id"])
+            return {**base, "sid": event["stroke"]["id"], **(stroke_activity_summary(stroke) if stroke else {})}
+
+        if event_type == "stroke.translate":
+            stroke = before.get("stroke")
+            return {
+                **base,
+                "sid": event["stroke_id"],
+                "dx": round(float(event["dx"]), 2),
+                "dy": round(float(event["dy"]), 2),
+                "target_author": stroke.author_id if stroke else None,
+            }
+
+        if event_type == "object.create":
+            raw = event["object"]
+            return {**base, "oid": raw["id"], "name": raw.get("name", "image")}
+
+        if event_type == "object.update":
+            return {**base, "oid": event["object_id"], "patch": compact_numeric_dict(event["patch"])}
+
+        if event_type == "object.reorder":
+            return {**base, "oid": event["object_id"], "position": event["position"]}
+
+        if event_type == "object.delete":
+            board_object = before.get("object")
+            record = {**base, "oid": event["object_id"]}
+            if board_object is not None:
+                record["name"] = board_object.name
+                record["target_author"] = board_object.author_id
+            return record
+
+        if event_type == "board.background":
+            return {**base, "background": dict(event["background"])}
+
+        if event_type == "board.clear":
+            return {**base, "removed": {"strokes": before.get("strokes", 0), "objects": before.get("objects", 0)}}
+
+        return None
+
+    def _remember_stroke_start(self, stroke_id: str, timestamp_ms: int) -> None:
+        self._stroke_started_ms[stroke_id] = timestamp_ms
+        if len(self._stroke_started_ms) <= MAX_ACTIVE_STROKE_TIMERS:
+            return
+        oldest_id = min(self._stroke_started_ms, key=self._stroke_started_ms.get)
+        self._stroke_started_ms.pop(oldest_id, None)
+
+    def _actor(self, client_id: str) -> dict[str, str]:
+        profile = self.client_profiles.get(client_id) or {
+            "name": "Участник",
+            "role": "student",
+            "device": "Устройство",
+        }
+        return {
+            "id": client_id,
+            "name": profile["name"],
+            "role": profile["role"],
+            "device": profile["device"],
+        }
+
+    async def _log_activity(self, record: dict[str, Any]) -> None:
+        try:
+            await asyncio.to_thread(self.store.append_activity, self.board_id, record)
+        except Exception:
+            logger.exception("failed to append activity for board %s", self.board_id)
 
     def _remember_op(self, op_id: str, revision: int) -> None:
         if len(self._recent_op_order) == self._recent_op_order.maxlen:
@@ -274,20 +420,21 @@ class BoardRoom:
     async def _ack(self, client_id: str, op_id: str, revision: int) -> None:
         websocket = self.clients.get(client_id)
         if websocket:
-            await websocket.send_json({"type": "ack", "op_id": op_id, "revision": revision})
+            await websocket.send_json({"type": "ack", "op_id": op_id, "revision": revision)
 
     async def _broadcast(self, message: dict[str, Any], exclude: str | None) -> None:
-        stale: list[str] = []
+        stale: list[tuple[str, dict[str, str]]] = []
         for client_id, websocket in list(self.clients.items()):
             if exclude is not None and client_id == exclude:
                 continue
             try:
                 await websocket.send_json(message)
             except Exception:
-                stale.append(client_id)
-        for client_id in stale:
+                stale.append((client_id, self._actor(client_id)))
+        for client_id, actor in stale:
             self.clients.pop(client_id, None)
             self.client_profiles.pop(client_id, None)
+            await self._log_activity({"v": 1, "t": now_ms(), "k": "leave", "actor": actor, "reason": "stale"})
 
     async def persist(self) -> None:
         async with self._persist_lock:
@@ -312,3 +459,41 @@ class RoomManager:
                 room = BoardRoom(board_id, self.store, document)
                 self.rooms[board_id] = room
             return room
+
+
+def now_ms() -> int:
+    return time.time_ns() // 1_000_000
+
+
+def stroke_activity_summary(stroke: Stroke) -> dict[str, Any]:
+    points = stroke.points
+    summary: dict[str, Any] = {
+        "points": len(points),
+        "color": stroke.color,
+        "width": round(float(stroke.width), 2),
+        "pointer": stroke.pointer_type,
+    }
+    if not points:
+        return summary
+
+    min_x = max_x = float(points[0]["x"])
+    min_y = max_y = float(points[0]["y"])
+    for point in points[1:]:
+        x = float(point["x"])
+        y = float(point["y"])
+        min_x = min(min_x, x)
+        min_y = min(min_y, y)
+        max_x = max(max_x, x)
+        max_y = max(max_y, y)
+    summary["bbox"] = [round(min_x, 2), round(min_y, 2), round(max_x, 2), round(max_y, 2)]
+    return summary
+
+
+def compact_numeric_dict(payload: dict[str, Any]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in payload.items():
+        if isinstance(value, float):
+            result[key] = round(value, 4)
+        else:
+            result[key] = value
+    return result
