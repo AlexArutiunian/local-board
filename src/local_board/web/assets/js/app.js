@@ -25,10 +25,8 @@ const input = new InputController({
   state,
   renderer,
   clientId,
-  sendEvent: (event) => realtime.send(event),
+  sendEvent: sendLocalEvent,
   onStrokeFinished: (strokeId) => {
-    // Keep pointerup extremely cheap. Store only the id; clone the stroke only if
-    // Undo is actually requested later.
     localUndo.push(strokeId);
     localRedo.length = 0;
     updateUndoButtons();
@@ -43,22 +41,16 @@ realtime = new RealtimeClient({
   onSnapshot: (board, pendingEvents) => {
     state.applySnapshot(board);
     for (const pending of pendingEvents) state.applyEvent(pending, null, clientId);
+    remoteFollow.seedLastFromStrokes(state.listStrokes());
     renderer.render();
+    updateGoToLastButton();
   },
   onEvent: (event, revision, actorId) => {
-    // Apply network state immediately but paint at most once per display frame.
-    // Multiple WebSocket append packets arriving in the same frame are therefore
-    // rendered together instead of forcing repeated full synchronous paints.
     state.applyEvent(event, revision, actorId);
-
-    // Follow is role-neutral: any remote participant who starts writing can become
-    // the active writer for this viewer. The controller only moves this browser's
-    // local camera and never sends viewport coordinates over the network.
     remoteFollow.observe(event, actorId);
     renderer.requestRender();
+    updateGoToLastButton();
 
-    // Remote append traffic is hot-path data; it cannot change our local undo
-    // availability, so avoid needless DOM work for every packet.
     if (event.type !== "stroke.append" && event.type !== "stroke.begin") {
       updateUndoButtons();
     }
@@ -71,6 +63,7 @@ realtime = new RealtimeClient({
 bindToolbar();
 realtime.connect();
 updateUndoButtons();
+updateGoToLastButton();
 
 window.addEventListener("beforeunload", () => realtime.close());
 
@@ -79,6 +72,12 @@ document.addEventListener("visibilitychange", () => {
     realtime.connect();
   }
 });
+
+function sendLocalEvent(event) {
+  remoteFollow.observeLocal(event);
+  updateGoToLastButton();
+  realtime.send(event);
+}
 
 function bindToolbar() {
   document.querySelectorAll("[data-tool]").forEach((button) => {
@@ -105,6 +104,7 @@ function bindToolbar() {
 
   document.getElementById("undo").addEventListener("click", undoLocalStroke);
   document.getElementById("redo").addEventListener("click", redoLocalStroke);
+  document.getElementById("goToLast").addEventListener("click", () => remoteFollow.goToLastWritten());
   document.getElementById("resetView").addEventListener("click", () => renderer.resetView());
   document.getElementById("exportPng").addEventListener("click", () => renderer.exportPng());
   document.getElementById("clearBoard").addEventListener("click", clearBoard);
@@ -119,7 +119,7 @@ function undoLocalStroke() {
     localRedo.push(cloneStroke(stroke));
     const event = { type: "stroke.delete", op_id: createId(), stroke_id: strokeId };
     state.applyEvent(event, null, clientId);
-    realtime.send(event);
+    sendLocalEvent(event);
     renderer.requestRender();
     break;
   }
@@ -137,11 +137,12 @@ function redoLocalStroke() {
       color: stroke.color,
       width: stroke.width,
       pointer_type: stroke.pointer_type,
+      source_zoom: stroke.source_zoom,
       points: stroke.points,
     },
   };
   state.applyEvent(event, null, clientId);
-  realtime.send(event);
+  sendLocalEvent(event);
   localUndo.push(stroke.id);
   renderer.requestRender();
   updateUndoButtons();
@@ -151,11 +152,12 @@ function clearBoard() {
   if (!confirm("Очистить эту доску у всех подключённых участников?")) return;
   const event = { type: "board.clear", op_id: createId() };
   state.applyEvent(event, null, clientId);
-  realtime.send(event);
+  sendLocalEvent(event);
   localUndo.length = 0;
   localRedo.length = 0;
   renderer.requestRender();
   updateUndoButtons();
+  updateGoToLastButton();
 }
 
 async function copyRoomLink() {
@@ -173,9 +175,7 @@ async function copyText(text) {
       await navigator.clipboard.writeText(text);
       return true;
     }
-  } catch (_) {
-    // LAN HTTP can deny Clipboard API; fall through to the legacy copy path.
-  }
+  } catch (_) {}
 
   const textarea = document.createElement("textarea");
   textarea.value = text;
@@ -197,6 +197,10 @@ async function copyText(text) {
 function updateUndoButtons() {
   document.getElementById("undo").disabled = !localUndo.some((strokeId) => state.hasStroke(strokeId));
   document.getElementById("redo").disabled = localRedo.length === 0;
+}
+
+function updateGoToLastButton() {
+  document.getElementById("goToLast").disabled = !remoteFollow.hasLastWritten();
 }
 
 function updatePresence(count) {
@@ -224,8 +228,6 @@ function updateConnection(status) {
 function bindRemoteFollowInteractionGuards(targetCanvas, follow) {
   const note = () => follow.noteLocalInteraction();
 
-  // Any active local manipulation temporarily wins over passive remote following.
-  // Move events refresh the grace period so a long pan/write cannot be interrupted.
   targetCanvas.addEventListener("pointerdown", note, { capture: true, passive: true });
   window.addEventListener("pointermove", (event) => {
     const pressure = Number(event.pressure || 0);
@@ -235,15 +237,11 @@ function bindRemoteFollowInteractionGuards(targetCanvas, follow) {
   window.addEventListener("pointerup", note, { capture: true, passive: true });
   window.addEventListener("pointercancel", note, { capture: true, passive: true });
 
-  // Safari's Pencil fallback can exist only as Touch Events on a problematic
-  // contact, so keep those interactions authoritative too.
   targetCanvas.addEventListener("touchstart", note, { capture: true, passive: true });
   window.addEventListener("touchmove", note, { capture: true, passive: true });
   window.addEventListener("touchend", note, { capture: true, passive: true });
   targetCanvas.addEventListener("wheel", note, { capture: true, passive: true });
 
-  // View/tool actions are deliberate local intent as well; do not immediately
-  // pull the user back to a remote writer after they touched the toolbar.
   document.querySelector(".toolbar")?.addEventListener("pointerdown", note, { capture: true, passive: true });
 }
 
@@ -253,8 +251,6 @@ function bindInputDiagnostics(targetCanvas, debug) {
   let lastPointerMoveLog = 0;
   let lastTouchMoveLog = 0;
 
-  // Log every contact type, not just pointerType=pen. If Safari classifies Pencil
-  // differently on a particular iPad/iOS version, the overlay must reveal that.
   targetCanvas.addEventListener("pointerdown", (event) => {
     debug.pointer("PD", event);
   }, { capture: true });
