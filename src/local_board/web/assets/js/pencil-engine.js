@@ -2,13 +2,7 @@ import { createId } from "./id.js";
 
 const MAX_NETWORK_BATCH_POINTS = 128;
 
-/**
- * Owns exactly one active ink contact.
- *
- * Normal path: pointerdown -> move* -> pointerup.
- * Recovery path: if WebKit drops a fast pointerdown, a contact-bearing pointermove
- * or stylus TouchEvent can reconstruct the stroke immediately.
- */
+/** Owns exactly one active ink contact. */
 export class PencilEngine {
   constructor({
     state,
@@ -33,24 +27,19 @@ export class PencilEngine {
     this.networkFlushHandle = null;
   }
 
-  isActive() {
-    return this.activePointerId !== null;
+  isActive() { return this.activePointerId !== null; }
+  ownsPointer(pointerId) { return this.activePointerId === pointerId; }
+
+  begin(event, { color, width, pointerType = event.pointerType || "pen" }) {
+    return this.beginSamples(event.pointerId, getSamples(event), { color, width, pointerType });
   }
 
-  ownsPointer(pointerId) {
-    return this.activePointerId === pointerId;
-  }
-
-  begin(event, { color, width }) {
-    return this.beginSamples(event.pointerId, getSamples(event), { color, width });
-  }
-
-  /** Start from a move/touch sample when the browser omitted pointerdown. */
+  /** Start from a move/touch sample when WebKit omitted pointerdown. */
   recover(event, { color, width }) {
-    return this.beginSamples(event.pointerId, getSamples(event), { color, width });
+    return this.beginSamples(event.pointerId, getSamples(event), { color, width, pointerType: "pen" });
   }
 
-  beginSamples(pointerId, samples, { color, width }) {
+  beginSamples(pointerId, samples, { color, width, pointerType = "pen" }) {
     if (this.isActive()) this.end(this.activePointerId);
 
     const usable = (samples || [])
@@ -66,7 +55,7 @@ export class PencilEngine {
       id: this.currentStrokeId,
       color,
       width,
-      pointer_type: "pen",
+      pointer_type: normalizePointerType(pointerType),
       source_zoom: this.renderer.view.zoom,
       points: [firstPoint],
     };
@@ -85,7 +74,6 @@ export class PencilEngine {
 
   move(event) {
     if (!this.ownsPointer(event.pointerId) || !this.currentStrokeId) return;
-
     if (!isContactEvent(event)) {
       this.end(event.pointerId);
       return;
@@ -95,7 +83,6 @@ export class PencilEngine {
       .filter((sample) => Number.isFinite(sample.clientX) && Number.isFinite(sample.clientY))
       .map((sample) => this.eventPoint(sample));
     if (!points.length) return;
-
     this.appendPoints(points);
     this.renderer.requestRender();
   }
@@ -121,7 +108,6 @@ export class PencilEngine {
       this.state.applyEvent(mutation, null, this.clientId);
       this.sendEvent(mutation);
       this.onStrokeFinished(strokeId);
-
       this.renderer.invalidateBase();
       this.renderer.requestRender();
     }
@@ -130,9 +116,7 @@ export class PencilEngine {
     return true;
   }
 
-  interrupt() {
-    if (this.isActive()) this.end(this.activePointerId);
-  }
+  interrupt() { if (this.isActive()) this.end(this.activePointerId); }
 
   scheduleNetworkFlush() {
     if (this.networkFlushHandle !== null) return;
@@ -174,9 +158,7 @@ export class PencilEngine {
     };
   }
 
-  withOp(event) {
-    return { ...event, op_id: createId() };
-  }
+  withOp(event) { return { ...event, op_id: createId() }; }
 }
 
 export function isContactEvent(event) {
@@ -191,6 +173,10 @@ function getSamples(event) {
     if (samples?.length) return samples;
   }
   return [event];
+}
+
+function normalizePointerType(value) {
+  return ["pen", "mouse", "touch"].includes(value) ? value : "pen";
 }
 
 function defaultScheduleFrame(callback) {
