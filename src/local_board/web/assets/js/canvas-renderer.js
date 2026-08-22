@@ -7,6 +7,15 @@ export class CanvasRenderer {
     this.view = this.loadView(boardId);
     this.boardId = boardId;
     this.renderHandle = null;
+
+    // Completed strokes are expensive to redraw for every realtime append. Keep
+    // them in a bitmap cache and draw only active/incomplete strokes each frame.
+    // A normal in-memory canvas is used instead of OffscreenCanvas for broad
+    // Safari compatibility.
+    this.baseCanvas = document.createElement("canvas");
+    this.baseCtx = this.baseCanvas.getContext("2d");
+    this.baseDirty = true;
+
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(canvas.parentElement);
     this.resize();
@@ -33,11 +42,21 @@ export class CanvasRenderer {
   resize() {
     const rect = this.canvas.parentElement.getBoundingClientRect();
     this.dpr = Math.max(1, window.devicePixelRatio || 1);
-    this.canvas.width = Math.round(rect.width * this.dpr);
-    this.canvas.height = Math.round(rect.height * this.dpr);
+    const pixelWidth = Math.max(1, Math.round(rect.width * this.dpr));
+    const pixelHeight = Math.max(1, Math.round(rect.height * this.dpr));
+
+    this.canvas.width = pixelWidth;
+    this.canvas.height = pixelHeight;
+    this.baseCanvas.width = pixelWidth;
+    this.baseCanvas.height = pixelHeight;
     this.canvas.style.width = `${rect.width}px`;
     this.canvas.style.height = `${rect.height}px`;
+    this.invalidateBase();
     this.render();
+  }
+
+  invalidateBase() {
+    this.baseDirty = true;
   }
 
   requestRender() {
@@ -49,17 +68,39 @@ export class CanvasRenderer {
   }
 
   render() {
-    const width = this.canvas.width / this.dpr;
-    const height = this.canvas.height / this.dpr;
+    if (this.baseDirty) this.rebuildBase();
+
+    // Copy the cached background/completed ink in device pixels. Then draw only
+    // currently active strokes. This keeps per-frame work almost independent of
+    // how much has already been written on the board.
     const ctx = this.ctx;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    ctx.drawImage(this.baseCanvas, 0, 0);
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-    ctx.clearRect(0, 0, width, height);
-    this.drawGrid(width, height);
-    for (const stroke of this.state.listStrokes()) this.drawStroke(stroke);
+
+    for (const stroke of this.state.listStrokes()) {
+      if (!stroke.complete) this.drawStrokeTo(ctx, stroke);
+    }
   }
 
-  drawGrid(width, height) {
-    const ctx = this.ctx;
+  rebuildBase() {
+    const width = this.canvas.width / this.dpr;
+    const height = this.canvas.height / this.dpr;
+    const ctx = this.baseCtx;
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, this.baseCanvas.width, this.baseCanvas.height);
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+
+    this.drawGridTo(ctx, width, height);
+    for (const stroke of this.state.listStrokes()) {
+      if (stroke.complete) this.drawStrokeTo(ctx, stroke);
+    }
+    this.baseDirty = false;
+  }
+
+  drawGridTo(ctx, width, height) {
     ctx.save();
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, width, height);
@@ -81,10 +122,10 @@ export class CanvasRenderer {
     ctx.restore();
   }
 
-  drawStroke(stroke) {
+  drawStrokeTo(ctx, stroke) {
     const points = stroke.points || [];
     if (!points.length) return;
-    const ctx = this.ctx;
+
     ctx.save();
     ctx.strokeStyle = stroke.color;
     ctx.fillStyle = stroke.color;
@@ -141,6 +182,7 @@ export class CanvasRenderer {
   panBy(dx, dy) {
     this.view.x += dx;
     this.view.y += dy;
+    this.invalidateBase();
     this.requestRender();
   }
 
@@ -152,12 +194,14 @@ export class CanvasRenderer {
     this.view.zoom = clamp(newZoom, 0.2, 5);
     this.view.x = sx - before.x * this.view.zoom;
     this.view.y = sy - before.y * this.view.zoom;
+    this.invalidateBase();
     this.requestRender();
   }
 
   resetView() {
     this.view = { x: 0, y: 0, zoom: 1 };
     this.saveView();
+    this.invalidateBase();
     this.requestRender();
   }
 
