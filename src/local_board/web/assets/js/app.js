@@ -1,6 +1,7 @@
 import { BoardState, cloneStroke } from "./board-state.js";
 import { CanvasRenderer } from "./canvas-renderer.js";
 import { InputController } from "./input-controller.js";
+import { createInputDiagnostics } from "./input-diagnostics.js";
 import { RealtimeClient } from "./realtime-client.js";
 import { createId } from "./id.js";
 
@@ -13,6 +14,7 @@ const localUndo = [];
 const localRedo = [];
 
 document.getElementById("boardName").textContent = boardId;
+bindInputDiagnostics(canvas);
 
 let realtime;
 const input = new InputController({
@@ -199,6 +201,53 @@ function updateConnection(status) {
     text.textContent = "Оффлайн";
     banner.classList.remove("hidden");
   }
+}
+
+function bindInputDiagnostics(targetCanvas) {
+  const debug = createInputDiagnostics();
+  if (!debug) return;
+
+  targetCanvas.addEventListener("pointerdown", (event) => {
+    if (event.pointerType === "pen") debug.pointer("PD", event);
+  }, { capture: true });
+
+  window.addEventListener("pointermove", (event) => {
+    if (event.pointerType !== "pen") return;
+    const pressure = Number(event.pressure || 0);
+    const buttons = Number(event.buttons || 0);
+    if (pressure > 0 || buttons !== 0) debug.pointer("PM-contact", event);
+  }, { capture: true });
+
+  for (const type of ["pointerup", "pointercancel"]) {
+    window.addEventListener(type, (event) => {
+      if (event.pointerType === "pen") debug.pointer(type === "pointerup" ? "PU" : "PC", event);
+    }, { capture: true });
+  }
+
+  targetCanvas.addEventListener("touchstart", (event) => {
+    const touch = firstStylusTouch(event.changedTouches);
+    if (touch) debug.touch("TS", touch);
+  }, { capture: true });
+
+  window.addEventListener("touchmove", (event) => {
+    const touch = firstStylusTouch(event.changedTouches);
+    if (touch) debug.touch("TM", touch);
+  }, { capture: true });
+
+  for (const type of ["touchend", "touchcancel"]) {
+    window.addEventListener(type, (event) => {
+      const touch = firstStylusTouch(event.changedTouches);
+      if (touch) debug.touch(type === "touchend" ? "TE" : "TC", touch);
+    }, { capture: true });
+  }
+}
+
+function firstStylusTouch(touchList) {
+  if (!touchList) return null;
+  for (const touch of Array.from(touchList)) {
+    if (touch.touchType === "stylus") return touch;
+  }
+  return null;
 }
 
 function resolveBoardId() {
