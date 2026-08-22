@@ -35,6 +35,7 @@ function makeHarness() {
   let nextHandle = 1;
 
   const renderer = {
+    view: { x: 0, y: 0, zoom: 0.65 },
     renderRequests: 0,
     baseInvalidations: 0,
     screenToWorld(x, y) { return { x, y }; },
@@ -74,6 +75,7 @@ function penEvent(pointerId, x = 10, y = 20, { pressure = 0.6, buttons = 1, samp
   const { engine, sent, finished, renderer } = makeHarness();
   engine.begin(penEvent(1), { color: "#111111", width: 4 });
   assert.equal(engine.ownsPointer(1), true);
+  assert.equal(sent[0].stroke.source_zoom, 0.65, "stroke.begin must carry the writer viewport zoom");
 
   engine.end(1);
   engine.begin(penEvent(2, 30, 40), { color: "#111111", width: 4 });
@@ -87,8 +89,6 @@ function penEvent(pointerId, x = 10, y = 20, { pressure = 0.6, buttons = 1, samp
 {
   const { engine, sent, finished } = makeHarness();
   engine.begin(penEvent(10), { color: "#111111", width: 4 });
-
-  // Missing previous pointerup must never block a fresh contact.
   engine.begin(penEvent(11, 50, 60), { color: "#111111", width: 4 });
 
   assert.equal(engine.ownsPointer(11), true);
@@ -99,8 +99,6 @@ function penEvent(pointerId, x = 10, y = 20, { pressure = 0.6, buttons = 1, samp
 {
   const { engine, sent } = makeHarness();
   engine.begin(penEvent(21), { color: "#111111", width: 4 });
-
-  // Hover/no-contact state reconstructs a missing pointerup.
   engine.move(penEvent(21, 15, 25, { pressure: 0, buttons: 0 }));
 
   assert.equal(engine.isActive(), false);
@@ -136,8 +134,6 @@ function penEvent(pointerId, x = 10, y = 20, { pressure = 0.6, buttons = 1, samp
     ],
   });
 
-  // Core regression: even with no pointerdown at all, a contact-bearing pen move
-  // must establish a stroke instead of being ignored until the next attempt.
   assert.equal(isContactEvent(recoveryMove), true);
   engine.recover(recoveryMove, { color: "#111111", width: 4 });
 
