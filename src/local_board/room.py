@@ -110,6 +110,7 @@ class BoardRoom:
             "stroke.translate",
             "object.create",
             "object.update",
+            "object.reorder",
             "object.delete",
             "board.clear",
         }:
@@ -211,6 +212,17 @@ class BoardRoom:
                 raise ProtocolError("invalid object crop")
             for key, value in patch.items():
                 setattr(board_object, key, value)
+            return
+
+        if event_type == "object.reorder":
+            object_id = event["object_id"]
+            if object_id not in self.objects:
+                raise ProtocolError("unknown object")
+            self.object_order = [item for item in self.object_order if item != object_id]
+            if event["position"] == "front":
+                self.object_order.append(object_id)
+            else:
+                self.object_order.insert(0, object_id)
             return
 
         if event_type == "object.delete":
