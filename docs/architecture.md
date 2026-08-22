@@ -221,11 +221,48 @@ Every mutation has `op_id`; retry delivery is deduplicated. Structural mutations
 
 Presence is ephemeral and additionally carries `roster`; it does not increment board revision.
 
+## Activity logging
+
+Activity history is intentionally separate from the current board snapshot. It is an append-only audit/replay stream, never a second in-memory copy of the whole lesson.
+
+For high-frequency ink the server does **not** log `stroke.begin` or any `stroke.append` packets. `BoardRoom` keeps only a bounded map of active stroke start timestamps (maximum 2048 entries). When `stroke.end` arrives, one semantic activity record is appended with:
+
+```text
+server timestamp + start timestamp + duration
+actor: client id, name, teacher/student role, device
+stroke id
+point count
+color / width / pointer type
+bounding box
+path_z
+```
+
+`path_z` is a replay payload produced in `activity.py`: `[x,y]` coordinates are quantized to 0.1 board units, serialized compactly, compressed with zlib and base85 encoded. Pressure is intentionally omitted from the audit copy. This preserves enough geometry to replay who wrote what even if the live stroke is later deleted or the board is cleared, without duplicating raw WebSocket traffic.
+
+Other semantic records include:
+
+```text
+join / leave
+stroke.delete / restore / translate
+object.create / update / reorder / delete
+board.background
+board.clear
+```
+
+`JsonBoardStore.append_activity()` opens, appends one compact JSON line and closes the file. Historical lines are never loaded into `BoardRoom`. Logs are sharded by room and UTC day:
+
+```text
+activity/<room>/YYYY-MM-DD.jsonl
+```
+
+This keeps RAM usage effectively constant with lesson length and prevents one ever-growing activity file.
+
 ## Persistence
 
 ```text
 ~/.local/share/local-board/boards/<room>.json
 ~/.local/share/local-board/assets/<room>/<asset>
+~/.local/share/local-board/activity/<room>/YYYY-MM-DD.jsonl
 ```
 
 Override root with `LOCAL_BOARD_DATA_DIR`.
@@ -238,7 +275,7 @@ Current JSON/filesystem storage intentionally matches single-process deployment.
 
 - one Uvicorn/FastAPI process;
 - process-local authoritative `BoardRoom`;
-- JSON + image files on one disk;
+- JSON + image files + append-only activity logs on one disk;
 - no real authentication;
 - roles are descriptive only.
 
