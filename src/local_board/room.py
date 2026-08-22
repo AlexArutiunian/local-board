@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import WebSocket
 
-from .models import Stroke
+from .models import BoardObject, Stroke
 from .protocol import MAX_POINTS_PER_STROKE, ProtocolError
 from .storage import JsonBoardStore
 
@@ -18,12 +18,20 @@ class BoardRoom:
         self.board_id = board_id
         self.store = store
         self.revision = int(document.get("revision", 0))
+
         self.strokes: dict[str, Stroke] = {}
         self.order: list[str] = []
         for raw in document.get("strokes", []):
             stroke = Stroke.from_dict(raw)
             self.strokes[stroke.id] = stroke
             self.order.append(stroke.id)
+
+        self.objects: dict[str, BoardObject] = {}
+        self.object_order: list[str] = []
+        for raw in document.get("objects", []):
+            board_object = BoardObject.from_dict(raw)
+            self.objects[board_object.id] = board_object
+            self.object_order.append(board_object.id)
 
         self.clients: dict[str, WebSocket] = {}
         self._state_lock = asyncio.Lock()
@@ -40,6 +48,11 @@ class BoardRoom:
                 self.strokes[stroke_id].to_dict()
                 for stroke_id in self.order
                 if stroke_id in self.strokes
+            ],
+            "objects": [
+                self.objects[object_id].to_dict()
+                for object_id in self.object_order
+                if object_id in self.objects
             ],
         }
 
@@ -102,6 +115,10 @@ class BoardRoom:
             "stroke.end",
             "stroke.delete",
             "stroke.restore",
+            "stroke.translate",
+            "object.create",
+            "object.update",
+            "object.delete",
             "board.clear",
         }:
             await self.persist()
@@ -145,15 +162,62 @@ class BoardRoom:
             stroke.complete = True
             return
 
+        if event_type == "stroke.translate":
+            stroke = self.strokes.get(event["stroke_id"])
+            if stroke is None:
+                raise ProtocolError("unknown stroke")
+            dx = event["dx"]
+            dy = event["dy"]
+            for point in stroke.points:
+                point["x"] += dx
+                point["y"] += dy
+            return
+
         if event_type == "stroke.delete":
             stroke_id = event["stroke_id"]
             self.strokes.pop(stroke_id, None)
             self.order = [item for item in self.order if item != stroke_id]
             return
 
+        if event_type == "object.create":
+            raw = event["object"]
+            object_id = raw["id"]
+            if object_id in self.objects:
+                raise ProtocolError("object id already exists")
+            board_object = BoardObject(
+                id=object_id,
+                author_id=client_id,
+                kind=raw["kind"],
+                x=raw["x"],
+                y=raw["y"],
+                width=raw["width"],
+                height=raw["height"],
+                src=raw["src"],
+                name=raw.get("name", "image"),
+            )
+            self.objects[object_id] = board_object
+            self.object_order.append(object_id)
+            return
+
+        if event_type == "object.update":
+            board_object = self.objects.get(event["object_id"])
+            if board_object is None:
+                raise ProtocolError("unknown object")
+            for key, value in event["patch"].items():
+                setattr(board_object, key, value)
+            return
+
+        if event_type == "object.delete":
+            object_id = event["object_id"]
+            self.objects.pop(object_id, None)
+            self.object_order = [item for item in self.object_order if item != object_id]
+            return
+
         if event_type == "board.clear":
             self.strokes.clear()
             self.order.clear()
+            self.objects.clear()
+            self.object_order.clear()
             return
 
         raise ProtocolError("unsupported mutation")
@@ -168,9 +232,7 @@ class BoardRoom:
     async def _ack(self, client_id: str, op_id: str, revision: int) -> None:
         websocket = self.clients.get(client_id)
         if websocket:
-            await websocket.send_json(
-                {"type": "ack", "op_id": op_id, "revision": revision}
-            )
+            await websocket.send_json({"type": "ack", "op_id": op_id, "revision": revision})
 
     async def _broadcast(self, message: dict[str, Any], exclude: str | None) -> None:
         stale: list[str] = []
