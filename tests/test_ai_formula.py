@@ -5,6 +5,8 @@ from fastapi.testclient import TestClient
 
 from local_board.ai_formula import (
     DEFAULT_FORMULA_MODEL,
+    MAX_OUTPUT_TOKENS,
+    REQUEST_TIMEOUT_SECONDS,
     FormulaNotFoundError,
     FormulaProviderUnavailableError,
     FormulaRecognitionError,
@@ -47,6 +49,16 @@ def test_formula_model_defaults_to_current_free_ox_alpha():
 
 def test_formula_candidates_do_not_race_unrelated_models():
     assert formula_model_candidates(DEFAULT_FORMULA_MODEL) == [DEFAULT_FORMULA_MODEL]
+
+
+def test_ox_transport_budget_does_not_cut_off_normal_slow_tail():
+    # OpenRouter currently reports ~6.8s P50 for Ox Alpha. Keep the client
+    # timeout comfortably above that so a healthy slow-tail request is not
+    # misreported by our own backend as HTTP 503.
+    assert REQUEST_TIMEOUT_SECONDS >= 20
+    # Avoid the old tiny completion cap on a reasoning model. Visible formula
+    # output remains short because the prompt asks for LaTeX only.
+    assert MAX_OUTPUT_TOKENS >= 128
 
 
 def test_no_formula_and_safety_output_detection():
