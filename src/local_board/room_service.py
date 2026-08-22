@@ -12,12 +12,11 @@ class RoomService:
         self.store = store
 
     def create_room(self) -> str:
-        # 12 random bytes -> ~16 URL-safe chars / 96 bits of entropy.
-        # A room id is intentionally hard to guess, but it is not authentication.
-        for _ in range(32):
-            room_id = secrets.token_urlsafe(12)
-            if not room_id[0].isalnum():
-                continue
+        # Human-friendly room code for lessons: exactly four decimal digits.
+        # This is intentionally NOT an authentication secret. Public deployment must
+        # add a separate owner/invite credential instead of treating the code as access control.
+        for _ in range(128):
+            room_id = f"{secrets.randbelow(10_000):04d}"
             if self.store.create(room_id):
                 return room_id
         raise RuntimeError("failed to allocate a unique room id")
