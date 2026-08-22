@@ -13,6 +13,7 @@ export class InputController {
     this.tool = "pen";
     this.color = "#111111";
     this.width = 4;
+    this.directInkEnabled = false;
 
     this.pencil = new PencilEngine({ state, renderer, sendEvent, clientId, onStrokeFinished });
 
@@ -24,6 +25,13 @@ export class InputController {
     this.panAnchor = null;
     this.pinchAnchor = null;
     this.erasedThisGesture = new Set();
+
+    // Deliberate non-Pencil input. It is only active when the user explicitly
+    // enables the toolbar toggle, so the default one-finger pan path is intact.
+    this.softPointerId = null;
+    this.softPointerType = null;
+    this.softMode = null;
+    this.softLastPoint = null;
 
     this.pendingStylusTouch = null;
     this.stylusFallbackTimer = null;
@@ -42,8 +50,12 @@ export class InputController {
     window.addEventListener("touchcancel", (event) => this.onStylusTouchEnd(event), { capture: true, passive: false });
 
     this.canvas.addEventListener("wheel", (event) => this.onWheel(event), { passive: false });
-    for (const type of ["selectstart", "dragstart", "contextmenu"]) this.canvas.addEventListener(type, (event) => event.preventDefault());
-    for (const type of ["gesturestart", "gesturechange", "gestureend"]) this.canvas.addEventListener(type, (event) => event.preventDefault(), { passive: false });
+    for (const type of ["selectstart", "dragstart", "contextmenu"]) {
+      this.canvas.addEventListener(type, (event) => event.preventDefault());
+    }
+    for (const type of ["gesturestart", "gesturechange", "gestureend"]) {
+      this.canvas.addEventListener(type, (event) => event.preventDefault(), { passive: false });
+    }
 
     window.addEventListener("blur", () => this.interruptInput());
     document.addEventListener("visibilitychange", () => {
@@ -62,9 +74,18 @@ export class InputController {
   setColor(color) { this.color = color; }
   setWidth(width) { this.width = Number(width); }
 
+  setDirectInkEnabled(enabled) {
+    const next = Boolean(enabled);
+    if (next === this.directInkEnabled) return;
+    this.directInkEnabled = next;
+    if (!next) this.finishSoftInput({ endInk: true });
+  }
+
   shouldSelect(event) {
-    return Boolean(this.selection)
-      && event.pointerType !== "touch"
+    if (!this.selection) return false;
+    if (this.selection.isCropping?.()) return true;
+    if (event.pointerType === "mouse" && event.button === 2) return true;
+    return event.pointerType !== "touch"
       && (this.tool === "select" || event.ctrlKey || event.metaKey);
   }
 
@@ -76,9 +97,11 @@ export class InputController {
       this.cancelStylusFallback();
       this.cancelTouchGesture();
       this.endMouseInteraction();
+      this.finishSoftInput({ endInk: true });
       this.pencil.interrupt();
       this.finishNonInkStylus();
-      this.selection.pointerDown(event);
+      const forceMarquee = event.pointerType === "mouse" && event.button === 2 && !this.selection.isCropping?.();
+      this.selection.pointerDown(event, { forceMarquee });
       return;
     }
 
@@ -86,10 +109,11 @@ export class InputController {
       this.cancelStylusFallback();
       this.cancelTouchGesture();
       this.endMouseInteraction();
+      this.finishSoftInput({ endInk: true });
       this.finishNonInkStylus();
 
       if (this.tool === "pen") {
-        this.pencil.begin(event, { color: this.color, width: this.width });
+        this.pencil.begin(event, { color: this.color, width: this.width, pointerType: "pen" });
       } else if (this.tool === "eraser" || this.tool === "pan") {
         this.pencil.interrupt();
         this.startNonInkStylus(event.pointerId, this.tool, event.clientX, event.clientY);
@@ -98,14 +122,36 @@ export class InputController {
     }
 
     if (event.pointerType === "touch") {
-      if (this.isStylusActive()) return;
+      if (this.isRealStylusActive()) return;
+
+      if (this.softPointerType === "touch" && this.softPointerId !== null) {
+        this.promoteSoftTouchToNavigation(event);
+        return;
+      }
+
+      if (this.directInkEnabled && this.tool === "pen" && this.touchPointers.size === 0) {
+        this.startSoftInk(event, "touch");
+        return;
+      }
+
+      if (this.directInkEnabled && this.tool === "eraser" && this.touchPointers.size === 0) {
+        this.startSoftErase(event);
+        return;
+      }
+
       this.touchPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
       this.startTouchGesture();
       return;
     }
 
-    if (this.isStylusActive()) return;
+    if (this.isRealStylusActive()) return;
     if (event.button !== undefined && event.button !== 0) return;
+
+    if (this.directInkEnabled && this.tool === "pen") {
+      this.startSoftInk(event, "mouse");
+      return;
+    }
+
     this.mousePointerId = event.pointerId;
     if (this.tool === "eraser") {
       this.mouseMode = "eraser";
@@ -126,7 +172,17 @@ export class InputController {
 
     if (this.pencil.ownsPointer(event.pointerId)) {
       preventDefault(event);
+      if (this.softPointerId === event.pointerId) {
+        this.softLastPoint = { x: event.clientX, y: event.clientY };
+      }
       this.pencil.move(event);
+      return;
+    }
+
+    if (this.softPointerId === event.pointerId && this.softMode === "eraser") {
+      preventDefault(event);
+      this.softLastPoint = { x: event.clientX, y: event.clientY };
+      this.eraseAt(event.clientX, event.clientY);
       return;
     }
 
@@ -135,6 +191,7 @@ export class InputController {
       this.cancelStylusFallback();
       this.cancelTouchGesture();
       this.endMouseInteraction();
+      this.finishSoftInput({ endInk: true });
       this.finishNonInkStylus();
 
       if (this.tool === "select" && this.selection) {
@@ -161,7 +218,7 @@ export class InputController {
 
     if (this.touchPointers.has(event.pointerId)) {
       preventDefault(event);
-      if (this.isStylusActive()) return;
+      if (this.isRealStylusActive()) return;
       this.touchPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
       this.moveTouchGesture();
       return;
@@ -184,6 +241,13 @@ export class InputController {
     if (this.pencil.ownsPointer(event.pointerId)) {
       preventDefault(event);
       this.pencil.end(event.pointerId);
+      if (this.softPointerId === event.pointerId) this.clearSoftTracking();
+      return;
+    }
+
+    if (this.softPointerId === event.pointerId && this.softMode === "eraser") {
+      preventDefault(event);
+      this.clearSoftTracking();
       return;
     }
 
@@ -211,6 +275,51 @@ export class InputController {
     }
   }
 
+  startSoftInk(event, pointerType) {
+    this.finishSoftInput({ endInk: true });
+    this.softPointerId = event.pointerId;
+    this.softPointerType = pointerType;
+    this.softMode = "ink";
+    this.softLastPoint = { x: event.clientX, y: event.clientY };
+    this.pencil.begin(event, { color: this.color, width: this.width, pointerType });
+  }
+
+  startSoftErase(event) {
+    this.finishSoftInput({ endInk: true });
+    this.softPointerId = event.pointerId;
+    this.softPointerType = "touch";
+    this.softMode = "eraser";
+    this.softLastPoint = { x: event.clientX, y: event.clientY };
+    this.erasedThisGesture.clear();
+    this.eraseAt(event.clientX, event.clientY);
+  }
+
+  promoteSoftTouchToNavigation(secondEvent) {
+    if (this.softPointerType !== "touch" || this.softPointerId === null) return;
+    const firstId = this.softPointerId;
+    const first = this.softLastPoint || { x: secondEvent.clientX, y: secondEvent.clientY };
+    if (this.softMode === "ink" && this.pencil.ownsPointer(firstId)) this.pencil.end(firstId);
+    this.clearSoftTracking();
+    this.touchPointers.set(firstId, { ...first });
+    this.touchPointers.set(secondEvent.pointerId, { x: secondEvent.clientX, y: secondEvent.clientY });
+    this.startTouchGesture();
+  }
+
+  finishSoftInput({ endInk = false } = {}) {
+    if (endInk && this.softMode === "ink" && this.softPointerId !== null && this.pencil.ownsPointer(this.softPointerId)) {
+      this.pencil.end(this.softPointerId);
+    }
+    this.clearSoftTracking();
+  }
+
+  clearSoftTracking() {
+    this.softPointerId = null;
+    this.softPointerType = null;
+    this.softMode = null;
+    this.softLastPoint = null;
+    this.erasedThisGesture.clear();
+  }
+
   onStylusTouchStart(event) {
     const touch = findStylusTouch(event.changedTouches);
     if (!touch) return;
@@ -220,7 +329,7 @@ export class InputController {
     this.stylusFallbackTimer = setTimeout(() => {
       this.stylusFallbackTimer = null;
       const pending = this.pendingStylusTouch;
-      if (!pending || this.isStylusActive()) return;
+      if (!pending || this.isRealStylusActive()) return;
       this.beginStylusTouchFallback(pending);
     }, 0);
   }
@@ -276,13 +385,14 @@ export class InputController {
       if (shouldSaveView) this.renderer.saveView();
       return;
     }
-    if (this.pencil.isActive()) this.pencil.interrupt();
+    if (this.pencil.isActive() && this.softPointerId === null) this.pencil.interrupt();
   }
 
   beginStylusTouchFallback(touchSnapshot) {
-    if (!touchSnapshot || this.isStylusActive()) return;
+    if (!touchSnapshot || this.isRealStylusActive()) return;
     this.cancelTouchGesture();
     this.endMouseInteraction();
+    this.finishSoftInput({ endInk: true });
     const adapted = touchToPointerLike(touchSnapshot);
 
     if (this.tool === "select" && this.selection) {
@@ -302,8 +412,9 @@ export class InputController {
     else this.panAnchor = { x: clientX, y: clientY };
   }
 
-  isStylusActive() {
-    return this.pencil.isActive() || this.stylusPointerId !== null || Boolean(this.selection?.activePointerId !== null && this.selection?.activePointerId !== undefined);
+  isRealStylusActive() {
+    const realPenInk = this.pencil.isActive() && this.softPointerId === null;
+    return realPenInk || this.stylusPointerId !== null;
   }
 
   finishNonInkStylus() {
@@ -388,6 +499,7 @@ export class InputController {
       || (this.mousePointerId !== null && this.mouseMode === "pan")
       || (this.stylusPointerId !== null && this.stylusMode === "pan");
     this.cancelStylusFallback();
+    this.finishSoftInput({ endInk: true });
     this.pencil.interrupt();
     this.selection?.cancelPointer();
     this.finishNonInkStylus();
@@ -408,7 +520,12 @@ export class InputController {
 
   eraseAt(clientX, clientY) {
     const point = this.renderer.screenToWorld(clientX, clientY);
-    const hit = findClosestStroke(this.state.listStrokes(), point, 18 / this.renderer.view.zoom, this.erasedThisGesture);
+    const hit = findClosestStroke(
+      this.state.listStrokes(),
+      point,
+      18 / this.renderer.view.zoom,
+      this.erasedThisGesture,
+    );
     if (!hit) return;
     this.erasedThisGesture.add(hit.id);
     const mutation = { type: "stroke.delete", op_id: createId(), stroke_id: hit.id };
@@ -423,14 +540,23 @@ export class InputController {
 }
 
 function preventDefault(event) { if (event.cancelable) event.preventDefault(); }
+
 function findStylusTouch(touchList) {
   if (!touchList) return null;
   for (const touch of Array.from(touchList)) if (touch.touchType === "stylus") return touch;
   return null;
 }
+
 function snapshotTouch(touch) {
-  return { identifier: touch.identifier, clientX: touch.clientX, clientY: touch.clientY, force: Number(touch.force || 0.45), touchType: "stylus" };
+  return {
+    identifier: touch.identifier,
+    clientX: touch.clientX,
+    clientY: touch.clientY,
+    force: Number(touch.force || 0.45),
+    touchType: "stylus",
+  };
 }
+
 function touchToPointerLike(touch) {
   return {
     pointerId: touchKey(touch.identifier),
@@ -442,6 +568,7 @@ function touchToPointerLike(touch) {
     buttons: 1,
   };
 }
+
 function touchKey(identifier) { return `stylus-touch:${identifier}`; }
 
 function findClosestStroke(strokes, point, radius, ignored) {
@@ -453,9 +580,12 @@ function findClosestStroke(strokes, point, radius, ignored) {
     const points = stroke.points || [];
     if (!points.length) continue;
     let distanceToStroke = Infinity;
-    if (points.length === 1) distanceToStroke = Math.hypot(point.x - points[0].x, point.y - points[0].y);
-    else {
-      for (let j = 0; j < points.length - 1; j += 1) distanceToStroke = Math.min(distanceToStroke, pointToSegment(point, points[j], points[j + 1]));
+    if (points.length === 1) {
+      distanceToStroke = Math.hypot(point.x - points[0].x, point.y - points[0].y);
+    } else {
+      for (let j = 0; j < points.length - 1; j += 1) {
+        distanceToStroke = Math.min(distanceToStroke, pointToSegment(point, points[j], points[j + 1]));
+      }
     }
     if (distanceToStroke < bestDistance) {
       bestDistance = distanceToStroke;
@@ -477,5 +607,6 @@ function pointToSegment(point, a, b) {
   const t = c1 / c2;
   return Math.hypot(point.x - (a.x + t * vx), point.y - (a.y + t * vy));
 }
+
 function midpoint(a, b) { return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; }
 function distance(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
