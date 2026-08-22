@@ -76,9 +76,8 @@ export function installSelectionProductivity({
     const originalPointerDown = input.onPointerDown.bind(input);
     const originalEffectiveStylusTool = input.effectiveStylusTool.bind(input);
 
-    // In an explicitly selected Select tool, Pencil means select as well. This
-    // does not affect the normal Pen tool rule where Pencil writes while a
-    // finger-selected image is open.
+    // Explicit Select means select for Pencil too. Outside Select the previous
+    // rule stays intact: Pen still writes while a finger-selected image is open.
     input.effectiveStylusTool = () => input.tool === "select" ? "select" : originalEffectiveStylusTool();
 
     input.onPointerDown = (event) => {
@@ -247,7 +246,8 @@ export function installSelectionProductivity({
         const event = { type: "stroke.restore", op_id: createId(), stroke };
         state.applyEvent(event, null, input.clientId);
         sendEvent(event, { recordHistory: false });
-        history?.recordCreatedStroke(id);
+        if (history?.recordCreatedStroke) history.recordCreatedStroke(id);
+        else input.pencil?.onStrokeFinished?.(id);
         newKeys.push(strokeKey(id));
       } else if (item.kind === "object") {
         const source = item.object;
