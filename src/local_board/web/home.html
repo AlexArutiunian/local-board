@@ -3,51 +3,70 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#f5f5f4" />
+  <meta name="theme-color" content="#f7f7f6" />
   <title>Local Board</title>
   <link rel="stylesheet" href="/assets/css/home.css" />
 </head>
 <body>
-  <main class="shell">
-    <section class="hero">
-      <div class="brand-row">
+  <div class="app-shell">
+    <header class="home-topbar">
+      <a class="home-brand" href="/" aria-label="Local Board">
         <span class="brand-mark"></span>
         <strong>Local Board</strong>
-      </div>
+      </a>
 
-      <p class="eyebrow">Совместная доска</p>
-      <h1>Создай комнату и отправь ученику ссылку.</h1>
-      <p class="lead">
-        Все участники одной комнаты видят рисунок в realtime. Сейчас сервер может работать в локальной сети,
-        а тот же room-flow рассчитан на будущий HTTPS-деплой.
-      </p>
+      <button id="createRoom" class="primary compact" type="button">
+        <span aria-hidden="true">＋</span>
+        Новая доска
+      </button>
+    </header>
 
-      <div class="actions">
-        <button id="createRoom" class="primary">Создать новую комнату</button>
-        <span id="createStatus" class="status" aria-live="polite"></span>
-      </div>
-    </section>
+    <main class="dashboard">
+      <section class="dashboard-heading">
+        <div>
+          <p class="eyebrow">Рабочее пространство</p>
+          <h1>Доски</h1>
+          <p class="lead">Создавай новые комнаты и возвращайся к прошлым доскам с этого устройства-сервера.</p>
+        </div>
 
-    <section class="join-card">
-      <div>
-        <p class="eyebrow">Уже есть комната?</p>
-        <h2>Введи 4 цифры</h2>
-      </div>
-      <form id="joinForm">
-        <input
-          id="roomInput"
-          inputmode="numeric"
-          pattern="[0-9]{4}"
-          maxlength="4"
-          autocomplete="off"
-          placeholder="0000"
-          aria-label="Четырёхзначный код комнаты"
-        />
-        <button type="submit">Открыть</button>
-      </form>
-      <p id="joinError" class="error hidden" aria-live="polite"></p>
-    </section>
-  </main>
+        <form id="joinForm" class="join-inline">
+          <label for="roomInput">Войти по коду</label>
+          <div class="join-row">
+            <input
+              id="roomInput"
+              inputmode="numeric"
+              pattern="[0-9]{4}"
+              maxlength="4"
+              autocomplete="off"
+              placeholder="0000"
+              aria-label="Четырёхзначный код комнаты"
+            />
+            <button type="submit">Открыть</button>
+          </div>
+          <p id="joinError" class="error hidden" aria-live="polite"></p>
+        </form>
+      </section>
+
+      <section class="boards-section" aria-labelledby="boardsTitle">
+        <div class="section-title-row">
+          <h2 id="boardsTitle">Последние доски</h2>
+          <span id="createStatus" class="status" aria-live="polite"></span>
+        </div>
+
+        <div id="boardsGrid" class="boards-grid" aria-live="polite">
+          <article class="board-card skeleton-card" aria-hidden="true"></article>
+          <article class="board-card skeleton-card" aria-hidden="true"></article>
+        </div>
+
+        <div id="emptyBoards" class="empty-state hidden">
+          <div class="empty-icon" aria-hidden="true">□</div>
+          <h3>Пока нет досок</h3>
+          <p>Создай первую — она появится здесь и останется доступной после перезапуска сервера.</p>
+          <button id="createRoomEmpty" class="primary" type="button">Создать доску</button>
+        </div>
+      </section>
+    </main>
+  </div>
 
   <script type="module" src="/assets/js/home.js"></script>
 </body>
