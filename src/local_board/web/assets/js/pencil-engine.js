@@ -1,4 +1,3 @@
-import { cloneStroke } from "./board-state.js";
 import { createId } from "./id.js";
 
 const MAX_NETWORK_BATCH_POINTS = 128;
@@ -6,9 +5,9 @@ const MAX_NETWORK_BATCH_POINTS = 128;
 /**
  * Owns exactly one active ink contact.
  *
- * Pointer classification happens on pointerdown. After that, pointerId is the
- * source of truth: Safari/WebKit quirks on later events must not make an active
- * Pencil session look like touch/mouse and silently drop samples.
+ * Normal path: pointerdown -> move* -> pointerup.
+ * Recovery path: if WebKit drops a fast pointerdown, a contact-bearing pointermove
+ * or stylus TouchEvent can reconstruct the stroke immediately.
  */
 export class PencilEngine {
   constructor({
@@ -43,43 +42,65 @@ export class PencilEngine {
   }
 
   begin(event, { color, width }) {
-    // Never reject a fresh Pencil contact because an older WebKit session got
-    // stuck without a clean pointerup. Close the old stroke and accept the new one.
+    return this.beginSamples(event.pointerId, getSamples(event), { color, width });
+  }
+
+  /** Start from a move/touch sample when the browser omitted pointerdown. */
+  recover(event, { color, width }) {
+    return this.beginSamples(event.pointerId, getSamples(event), { color, width });
+  }
+
+  beginSamples(pointerId, samples, { color, width }) {
     if (this.isActive()) this.end(this.activePointerId);
 
-    this.activePointerId = event.pointerId;
+    const usable = (samples || [])
+      .filter((sample) => Number.isFinite(sample.clientX) && Number.isFinite(sample.clientY));
+    if (!usable.length) return false;
+
+    this.activePointerId = pointerId;
     this.currentStrokeId = createId();
     this.pendingNetworkPoints.length = 0;
 
+    const firstPoint = this.eventPoint(usable[0]);
     const stroke = {
       id: this.currentStrokeId,
       color,
       width,
       pointer_type: "pen",
-      points: [this.eventPoint(event)],
+      points: [firstPoint],
     };
     const mutation = this.withOp({ type: "stroke.begin", stroke });
     this.state.applyEvent(mutation, null, this.clientId);
     this.sendEvent(mutation);
+
+    if (usable.length > 1) {
+      const rest = usable.slice(1).map((sample) => this.eventPoint(sample));
+      this.appendPoints(rest);
+    }
+
     this.renderer.requestRender();
+    return true;
   }
 
   move(event) {
     if (!this.ownsPointer(event.pointerId) || !this.currentStrokeId) return;
 
-    // Defensive WebKit fallback: if an up/cancel event is lost but Safari starts
-    // reporting the stylus as hovering (no active button/contact), finish now.
-    if (event.buttons === 0 && Number(event.pressure || 0) === 0) {
+    if (!isContactEvent(event)) {
       this.end(event.pointerId);
       return;
     }
 
-    const samples = getSamples(event);
-    const points = samples
+    const points = getSamples(event)
       .filter((sample) => Number.isFinite(sample.clientX) && Number.isFinite(sample.clientY))
       .map((sample) => this.eventPoint(sample));
     if (!points.length) return;
 
+    this.appendPoints(points);
+    this.renderer.requestRender();
+  }
+
+  appendPoints(points) {
+    if (!this.currentStrokeId || !points.length) return;
     this.state.applyEvent(
       { type: "stroke.append", stroke_id: this.currentStrokeId, points },
       null,
@@ -87,7 +108,6 @@ export class PencilEngine {
     );
     this.pendingNetworkPoints.push(...points);
     this.scheduleNetworkFlush();
-    this.renderer.requestRender();
   }
 
   end(pointerId) {
@@ -99,9 +119,7 @@ export class PencilEngine {
       const mutation = this.withOp({ type: "stroke.end", stroke_id: strokeId });
       this.state.applyEvent(mutation, null, this.clientId);
       this.sendEvent(mutation);
-
-      const finished = this.state.getStroke(strokeId);
-      if (finished) this.onStrokeFinished(cloneStroke(finished));
+      this.onStrokeFinished(strokeId);
       this.renderer.requestRender();
     }
 
@@ -145,17 +163,23 @@ export class PencilEngine {
 
   eventPoint(event) {
     const point = this.renderer.screenToWorld(event.clientX, event.clientY);
-    const pressure = Number(event.pressure);
+    const pressure = Number(event.pressure ?? event.force);
     return {
       x: point.x,
       y: point.y,
-      pressure: Number.isFinite(pressure) && pressure > 0 ? pressure : 0.45,
+      pressure: Number.isFinite(pressure) && pressure > 0 ? Math.min(1, pressure) : 0.45,
     };
   }
 
   withOp(event) {
     return { ...event, op_id: createId() };
   }
+}
+
+export function isContactEvent(event) {
+  const pressure = Number(event.pressure ?? event.force ?? 0);
+  const buttons = Number(event.buttons ?? 0);
+  return pressure > 0 || buttons !== 0;
 }
 
 function getSamples(event) {
