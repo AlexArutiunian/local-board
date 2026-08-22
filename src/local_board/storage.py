@@ -2,12 +2,20 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Any
 
 BOARD_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+ASSET_NAME_RE = re.compile(r"^[a-f0-9]{32}\.(png|jpg|webp|gif)$")
+ASSET_EXTENSIONS = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/webp": "webp",
+    "image/gif": "gif",
+}
 
 
 def validate_board_id(board_id: str) -> str:
@@ -17,17 +25,11 @@ def validate_board_id(board_id: str) -> str:
 
 
 def empty_board_document(board_id: str) -> dict[str, Any]:
-    return {
-        "version": 1,
-        "board_id": board_id,
-        "revision": 0,
-        "strokes": [],
-        "objects": [],
-    }
+    return {"version": 1, "board_id": board_id, "revision": 0, "strokes": [], "objects": []}
 
 
 class JsonBoardStore:
-    """Atomic JSON persistence for a single-host board server."""
+    """Atomic JSON persistence and local asset storage for one server."""
 
     def __init__(self, data_dir: Path):
         self.data_dir = data_dir
@@ -44,13 +46,8 @@ class JsonBoardStore:
         return self._path(board_id).is_file()
 
     def create(self, board_id: str) -> bool:
-        """Create an empty room exactly once; return False on id collision."""
         path = self._path(board_id)
-        encoded = json.dumps(
-            empty_board_document(board_id),
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
+        encoded = json.dumps(empty_board_document(board_id), ensure_ascii=False, separators=(",", ":"))
         with self._write_lock:
             try:
                 with path.open("x", encoding="utf-8") as file:
@@ -60,7 +57,6 @@ class JsonBoardStore:
         return True
 
     def list_boards(self) -> list[dict[str, Any]]:
-        """Return persisted boards ordered by most recently changed first."""
         boards: list[dict[str, Any]] = []
         for path in self.boards_dir.glob("*.json"):
             board_id = path.stem
@@ -79,9 +75,7 @@ class JsonBoardStore:
                     "revision": int(payload.get("revision", 0)) if isinstance(payload, dict) else 0,
                     "stroke_count": len(strokes) if isinstance(strokes, list) else 0,
                     "object_count": len(objects) if isinstance(objects, list) else 0,
-                    "updated_at": datetime.fromtimestamp(
-                        stat.st_mtime, tz=timezone.utc
-                    ).isoformat(),
+                    "updated_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
                 }
             )
         boards.sort(key=lambda item: item["updated_at"], reverse=True)
@@ -109,3 +103,22 @@ class JsonBoardStore:
         with self._write_lock:
             tmp.write_text(encoded, encoding="utf-8")
             tmp.replace(path)
+
+    def save_asset(self, board_id: str, content_type: str, data: bytes) -> str:
+        validate_board_id(board_id)
+        extension = ASSET_EXTENSIONS.get(content_type)
+        if extension is None:
+            raise ValueError("unsupported image type")
+        room_dir = self.assets_dir / board_id
+        room_dir.mkdir(parents=True, exist_ok=True)
+        name = f"{secrets.token_hex(16)}.{extension}"
+        path = room_dir / name
+        with self._write_lock:
+            path.write_bytes(data)
+        return name
+
+    def asset_path(self, board_id: str, asset_name: str) -> Path:
+        validate_board_id(board_id)
+        if not ASSET_NAME_RE.fullmatch(asset_name):
+            raise ValueError("invalid asset name")
+        return self.assets_dir / board_id / asset_name
