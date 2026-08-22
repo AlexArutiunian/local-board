@@ -29,7 +29,7 @@ export async function editParticipantProfile(currentProfile) {
   await showProfileDialog({
     role: currentProfile?.role === "teacher" ? "teacher" : "student",
     name: currentProfile?.name || "",
-    lockRole: false,
+    lockRole: true,
     title: "Ваш профиль в комнате",
   });
   window.history.replaceState(null, "", location.pathname);
