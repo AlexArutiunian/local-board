@@ -5,8 +5,12 @@ from fastapi.testclient import TestClient
 
 from local_board.ai_formula import (
     DEFAULT_FORMULA_MODEL,
+    FormulaNotFoundError,
+    FormulaProviderUnavailableError,
     FormulaRecognitionError,
     extract_latex,
+    formula_model_candidates,
+    is_no_formula_response,
     validate_formula_image_data_url,
     validate_free_formula_model,
 )
@@ -28,8 +32,24 @@ def test_validate_formula_image_data_url():
 def test_formula_models_are_fail_closed_to_free_only():
     assert validate_free_formula_model("google/gemma-4-31b-it:free").endswith(":free")
     assert validate_free_formula_model("stealth/ox-alpha") == DEFAULT_FORMULA_MODEL
+    assert validate_free_formula_model("openrouter/free") == "openrouter/free"
     with pytest.raises(FormulaRecognitionError):
         validate_free_formula_model("google/gemini-3.1-flash-lite")
+
+
+def test_formula_candidates_have_only_free_routes_and_fallbacks():
+    candidates = formula_model_candidates(DEFAULT_FORMULA_MODEL)
+    assert candidates[0] == DEFAULT_FORMULA_MODEL
+    assert "dots-studio/dots-3-note-preview:free" in candidates
+    assert "openrouter/free" in candidates
+    assert len(candidates) == len(set(candidates))
+    assert all(item.endswith(":free") or item == "openrouter/free" for item in candidates)
+
+
+def test_no_formula_sentinel_is_detected():
+    assert is_no_formula_response("__NO_FORMULA__")
+    assert is_no_formula_response("no formula found")
+    assert not is_no_formula_response(r"x^2+1=0")
 
 
 def test_formula_endpoint_requires_server_side_key(tmp_path, monkeypatch):
@@ -44,3 +64,32 @@ def test_formula_endpoint_requires_server_side_key(tmp_path, monkeypatch):
     assert response.status_code == 503
     assert "OPENROUTER_API_KEY" in response.json()["detail"]
     assert "OPENROUTER_API_KEY" not in os.environ
+
+
+def test_formula_endpoint_distinguishes_no_formula_from_provider_outage(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    app = create_app(tmp_path)
+
+    async def no_formula(*args, **kwargs):
+        raise FormulaNotFoundError("В выделенной области не удалось найти формулу")
+
+    monkeypatch.setattr("local_board.main.recognize_formula", no_formula)
+    with TestClient(app) as client:
+        room_id = client.post("/api/rooms").json()["room_id"]
+        response = client.post(
+            f"/api/boards/{room_id}/ai/formula",
+            json={"image": "data:image/png;base64,iVBORw0KGgo="},
+        )
+    assert response.status_code == 422
+
+    async def unavailable(*args, **kwargs):
+        raise FormulaProviderUnavailableError("Бесплатные OCR-модели временно недоступны")
+
+    monkeypatch.setattr("local_board.main.recognize_formula", unavailable)
+    with TestClient(app) as client:
+        room_id = client.post("/api/rooms").json()["room_id"]
+        response = client.post(
+            f"/api/boards/{room_id}/ai/formula",
+            json={"image": "data:image/png;base64,iVBORw0KGgo="},
+        )
+    assert response.status_code == 503
