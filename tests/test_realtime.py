@@ -24,6 +24,7 @@ def test_two_clients_receive_live_stroke_and_new_client_gets_snapshot(tmp_path):
             "color": "#111111",
             "width": 4,
             "pointer_type": "pen",
+            "source_zoom": 0.65,
             "points": [{"x": 10, "y": 20, "pressure": 0.7}],
         },
     }
@@ -50,6 +51,7 @@ def test_two_clients_receive_live_stroke_and_new_client_gets_snapshot(tmp_path):
                 assert receive_type(a, "ack", op_id="op-begin")["revision"] == 1
                 remote_begin = receive_type(b, "event")
                 assert remote_begin["event"]["type"] == "stroke.begin"
+                assert remote_begin["event"]["stroke"]["source_zoom"] == 0.65
 
                 a.send_json(append)
                 receive_type(a, "ack", op_id="op-append")
@@ -66,3 +68,4 @@ def test_two_clients_receive_live_stroke_and_new_client_gets_snapshot(tmp_path):
                 assert len(snapshot["strokes"]) == 1
                 assert len(snapshot["strokes"][0]["points"]) == 2
                 assert snapshot["strokes"][0]["complete"] is True
+                assert snapshot["strokes"][0]["source_zoom"] == 0.65
