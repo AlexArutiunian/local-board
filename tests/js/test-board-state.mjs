@@ -46,6 +46,13 @@ state.applyEvent({
   },
 }, 2, "remote");
 assert.equal(state.getObject("i2").author_id, "remote");
+assert.deepEqual(state.listObjects().map((object) => object.id), ["i1", "i2"]);
+
+state.applyEvent({ type: "object.reorder", object_id: "i1", position: "front" });
+assert.deepEqual(state.listObjects().map((object) => object.id), ["i2", "i1"]);
+
+state.applyEvent({ type: "object.reorder", object_id: "i1", position: "back" });
+assert.deepEqual(state.listObjects().map((object) => object.id), ["i1", "i2"]);
 
 state.applyEvent({ type: "object.delete", object_id: "i1" });
 assert.equal(state.hasObject("i1"), false);
