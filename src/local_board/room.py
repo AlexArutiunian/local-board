@@ -74,7 +74,13 @@ class BoardRoom:
                 "device": "Устройство",
             }
             roster.append({"client_id": client_id, **profile})
-        roster.sort(key=lambda item: (0 if item["role"] == "teacher" else 1, item["name"].lower(), item["device"].lower()))
+        roster.sort(
+            key=lambda item: (
+                0 if item["role"] == "teacher" else 1,
+                item["name"].lower(),
+                item["device"].lower(),
+            )
+        )
         return {"type": "presence", "participants": len(roster), "roster": roster}
 
     async def connect(self, client_id: str, websocket: WebSocket, profile: dict[str, str]) -> None:
@@ -372,7 +378,13 @@ class BoardRoom:
             return {**base, "background": dict(event["background"])}
 
         if event_type == "board.clear":
-            return {**base, "removed": {"strokes": before.get("strokes", 0), "objects": before.get("objects", 0)}}
+            return {
+                **base,
+                "removed": {
+                    "strokes": before.get("strokes", 0),
+                    "objects": before.get("objects", 0),
+                },
+            }
 
         return None
 
@@ -412,7 +424,7 @@ class BoardRoom:
     async def _ack(self, client_id: str, op_id: str, revision: int) -> None:
         websocket = self.clients.get(client_id)
         if websocket:
-            await websocket.send_json({"type": "ack", "op_id": op_id, "revision": revision)
+            await websocket.send_json({"type": "ack", "op_id": op_id, "revision": revision})
 
     async def _broadcast(self, message: dict[str, Any], exclude: str | None) -> None:
         stale: list[tuple[str, dict[str, str]]] = []
@@ -426,7 +438,9 @@ class BoardRoom:
         for client_id, actor in stale:
             self.clients.pop(client_id, None)
             self.client_profiles.pop(client_id, None)
-            await self._log_activity({"v": 1, "t": now_ms(), "k": "leave", "actor": actor, "reason": "stale"})
+            await self._log_activity(
+                {"v": 1, "t": now_ms(), "k": "leave", "actor": actor, "reason": "stale"}
+            )
 
     async def persist(self) -> None:
         async with self._persist_lock:
