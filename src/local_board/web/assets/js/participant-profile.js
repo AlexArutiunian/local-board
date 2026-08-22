@@ -22,12 +22,15 @@ export async function resolveParticipantProfile() {
 }
 
 export async function editParticipantProfile(currentProfile) {
-  return showProfileDialog({
+  await showProfileDialog({
     role: currentProfile?.role === "teacher" ? "teacher" : "student",
     name: currentProfile?.name || "",
     lockRole: false,
     title: "Ваш профиль в комнате",
   });
+  window.history.replaceState(null, "", location.pathname);
+  location.reload();
+  return new Promise(() => {});
 }
 
 export function roleLabel(role) {
@@ -72,7 +75,7 @@ function stripNameFromUrl() {
   const url = new URL(location.href);
   if (!url.searchParams.has("name")) return;
   url.searchParams.delete("name");
-  history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+  window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
 }
 
 function showProfileDialog({ role, name = "", lockRole = false, title = "Кто вы в этой доске?" }) {
