@@ -2,7 +2,7 @@
 
 ## Goal
 
-`local-board` — room-based realtime-доска для занятий. Преподаватель создаёт комнату, отправляет ссылку ученику, и все участники комнаты видят общий canvas во время рисования.
+`local-board` — room-based realtime-доска для занятий. Преподаватель создаёт комнату, отправляет ссылку или сообщает 4-значный код ученику, и все участники комнаты видят общий canvas во время рисования.
 
 Текущий способ запуска — один Linux-хост в LAN. При этом приложение намеренно **host-agnostic**: frontend использует same-origin HTTP/WebSocket URLs и не знает, работает ли он на `192.168.x.x`, `localhost` или будущем HTTPS-домене.
 
@@ -11,10 +11,11 @@
 ```text
 teacher creates room
 → server persists room identity
-→ teacher shares /b/<room-id>
-→ student opens the same URL
+→ teacher shares /b/<4-digit-code>
+→ student opens the same URL or enters the code
 → both connect to the same BoardRoom
 → Pencil stroke renders locally immediately
+→ append points are batched for network transport
 → mutation travels over WebSocket
 → server applies authoritative state
 → other participants render it live
@@ -40,12 +41,12 @@ flowchart LR
 
 Rooms are explicit resources.
 
-1. `POST /api/rooms` allocates a random URL-safe room id.
+1. `POST /api/rooms` allocates a free code from `0000` to `9999`.
 2. An empty persisted board document is created immediately.
-3. `/b/<room-id>` is available only for an existing room.
-4. WebSocket connections are also rejected for unknown room ids.
+3. `/b/<room-code>` is available only for an existing room.
+4. WebSocket connections are also rejected for unknown room codes.
 
-Random room ids are hard to guess, which is useful for local demos and invitation UX, but **they are not an authorization system**. Public deployment still needs explicit ownership/permissions.
+A four-digit code is deliberately optimized for classroom UX, not security. It is easy to say/type but has only 10 000 variants. **Public deployment must never treat it as authorization**; owner/invite credentials are a separate future layer.
 
 ### Frontend
 
@@ -54,7 +55,11 @@ Random room ids are hard to guess, which is useful for local demos and invitatio
 - touch/palm never creates ink;
 - while Pencil is active, touch/palm is ignored so the canvas does not move under the hand;
 - otherwise one finger pans and two fingers pinch-zoom;
-- local stroke is rendered optimistically before network round-trip;
+- Safari text selection, touch callout, drag and context-menu gestures are suppressed on the board surface;
+- unexpected pointer-capture loss finalizes/cleans the active Pencil state instead of leaving input stuck;
+- coalesced Pencil samples are applied to local state immediately;
+- rendering is scheduled at most once per animation frame;
+- outgoing `stroke.append` points are batched once per animation frame (bounded chunks) and flushed before `stroke.end`;
 - viewport (`x/y/zoom`) is local per browser and is never synchronized;
 - API requests use relative same-origin paths;
 - WebSocket derives `ws://` / `wss://` from `location.protocol`;
@@ -106,7 +111,7 @@ This avoids losing a just-written stroke during a short Wi-Fi interruption.
 Current single-host storage:
 
 ```text
-~/.local/share/local-board/boards/<room-id>.json
+~/.local/share/local-board/boards/<room-code>.json
 ```
 
 Override with `LOCAL_BOARD_DATA_DIR`.
@@ -143,7 +148,7 @@ Before exposing the service publicly, add at minimum:
 
 - HTTPS/WSS;
 - teacher ownership and participant permissions;
-- authentication/invite policy appropriate for the product;
+- a real authentication/invite credential independent of the 4-digit room code;
 - rate limits for room creation and WebSocket traffic;
 - WebSocket Origin/Host policy;
 - request/body limits and abuse monitoring;
