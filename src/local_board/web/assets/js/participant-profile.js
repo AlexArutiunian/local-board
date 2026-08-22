@@ -1,6 +1,9 @@
+import { bindPenUiControls } from "./pen-ui-controls.js";
+
 const ROLES = new Set(["teacher", "student"]);
 
 export async function resolveParticipantProfile() {
+  bindPenUiControls(document);
   const params = new URLSearchParams(location.search);
   const roleHint = ROLES.has(params.get("role")) ? params.get("role") : null;
   const nameHint = cleanName(params.get("name"));
@@ -22,6 +25,7 @@ export async function resolveParticipantProfile() {
 }
 
 export async function editParticipantProfile(currentProfile) {
+  bindPenUiControls(document);
   await showProfileDialog({
     role: currentProfile?.role === "teacher" ? "teacher" : "student",
     name: currentProfile?.name || "",
