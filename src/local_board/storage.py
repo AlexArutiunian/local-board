@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -16,15 +17,24 @@ def validate_board_id(board_id: str) -> str:
 
 
 def empty_board_document(board_id: str) -> dict[str, Any]:
-    return {"version": 1, "board_id": board_id, "revision": 0, "strokes": []}
+    return {
+        "version": 1,
+        "board_id": board_id,
+        "revision": 0,
+        "strokes": [],
+        "objects": [],
+    }
 
 
 class JsonBoardStore:
     """Atomic JSON persistence for a single-host board server."""
 
     def __init__(self, data_dir: Path):
+        self.data_dir = data_dir
         self.boards_dir = data_dir / "boards"
+        self.assets_dir = data_dir / "assets"
         self.boards_dir.mkdir(parents=True, exist_ok=True)
+        self.assets_dir.mkdir(parents=True, exist_ok=True)
         self._write_lock = Lock()
 
     def _path(self, board_id: str) -> Path:
@@ -49,6 +59,34 @@ class JsonBoardStore:
                 return False
         return True
 
+    def list_boards(self) -> list[dict[str, Any]]:
+        """Return persisted boards ordered by most recently changed first."""
+        boards: list[dict[str, Any]] = []
+        for path in self.boards_dir.glob("*.json"):
+            board_id = path.stem
+            try:
+                validate_board_id(board_id)
+                stat = path.stat()
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (ValueError, OSError, json.JSONDecodeError):
+                continue
+            strokes = payload.get("strokes") if isinstance(payload, dict) else []
+            objects = payload.get("objects") if isinstance(payload, dict) else []
+            boards.append(
+                {
+                    "room_id": board_id,
+                    "path": f"/b/{board_id}",
+                    "revision": int(payload.get("revision", 0)) if isinstance(payload, dict) else 0,
+                    "stroke_count": len(strokes) if isinstance(strokes, list) else 0,
+                    "object_count": len(objects) if isinstance(objects, list) else 0,
+                    "updated_at": datetime.fromtimestamp(
+                        stat.st_mtime, tz=timezone.utc
+                    ).isoformat(),
+                }
+            )
+        boards.sort(key=lambda item: item["updated_at"], reverse=True)
+        return boards
+
     def load(self, board_id: str) -> dict[str, Any]:
         path = self._path(board_id)
         if not path.exists():
@@ -59,6 +97,9 @@ class JsonBoardStore:
             raise RuntimeError(f"failed to load board {board_id!r}") from exc
         if not isinstance(payload, dict) or not isinstance(payload.get("strokes"), list):
             raise RuntimeError(f"invalid board document for {board_id!r}")
+        if not isinstance(payload.get("objects", []), list):
+            raise RuntimeError(f"invalid objects for board {board_id!r}")
+        payload.setdefault("objects", [])
         return payload
 
     def save(self, board_id: str, document: dict[str, Any]) -> None:
