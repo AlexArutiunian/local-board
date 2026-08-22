@@ -298,7 +298,7 @@ export class InputController {
     if (this.softPointerType !== "touch" || this.softPointerId === null) return;
     const firstId = this.softPointerId;
     const first = this.softLastPoint || { x: secondEvent.clientX, y: secondEvent.clientY };
-    if (this.softMode === "ink" && this.pencil.ownsPointer(firstId)) this.pencil.end(firstId);
+    if (this.softMode === "ink" && this.pencil.ownsPointer(firstId)) this.pencil.cancel(firstId);
     this.clearSoftTracking();
     this.touchPointers.set(firstId, { ...first });
     this.touchPointers.set(secondEvent.pointerId, { x: secondEvent.clientX, y: secondEvent.clientY });
