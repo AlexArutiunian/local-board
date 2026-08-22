@@ -36,10 +36,13 @@ def test_two_clients_receive_live_stroke_and_new_client_gets_snapshot(tmp_path):
     end = {"type": "stroke.end", "op_id": "op-end", "stroke_id": "stroke-1"}
 
     with TestClient(app) as client:
-        with client.websocket_connect("/ws/study?client_id=a") as a:
+        room_id = client.post("/api/rooms").json()["room_id"]
+        socket_path = f"/ws/{room_id}"
+
+        with client.websocket_connect(f"{socket_path}?client_id=a") as a:
             assert receive_type(a, "snapshot")["board"]["strokes"] == []
 
-            with client.websocket_connect("/ws/study?client_id=b") as b:
+            with client.websocket_connect(f"{socket_path}?client_id=b") as b:
                 receive_type(b, "snapshot")
                 receive_type(a, "presence")
 
@@ -57,7 +60,7 @@ def test_two_clients_receive_live_stroke_and_new_client_gets_snapshot(tmp_path):
                 receive_type(a, "ack", op_id="op-end")
                 assert receive_type(b, "event")["event"]["type"] == "stroke.end"
 
-            with client.websocket_connect("/ws/study?client_id=c") as c:
+            with client.websocket_connect(f"{socket_path}?client_id=c") as c:
                 snapshot = receive_type(c, "snapshot")["board"]
                 assert snapshot["revision"] == 3
                 assert len(snapshot["strokes"]) == 1
