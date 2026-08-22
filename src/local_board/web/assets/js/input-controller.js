@@ -28,7 +28,6 @@ export class InputController {
     this.panAnchor = null;
     this.pinchAnchor = null;
     this.erasedThisGesture = new Set();
-    this.useRawPenUpdates = typeof window !== "undefined" && "onpointerrawupdate" in window;
 
     this.bind();
   }
@@ -36,10 +35,10 @@ export class InputController {
   bind() {
     this.canvas.addEventListener("pointerdown", (event) => this.onPointerDown(event), { passive: false });
 
-    // Listen at window level after contact begins. We do not manually capture Pencil:
-    // direct-manipulation pointers already have implicit capture semantics, and avoiding
-    // explicit capture/release keeps rapid Apple Pencil re-contact independent of
-    // WebKit's capture lifecycle quirks.
+    // Continue an already-started contact at window level. We deliberately avoid
+    // explicit setPointerCapture/releasePointerCapture for Pencil: direct-manipulation
+    // pointers have implicit capture semantics, while WebKit has historically had
+    // edge cases around explicit capture transitions during rapid contacts.
     window.addEventListener("pointermove", (event) => this.onPointerMove(event), {
       capture: true,
       passive: false,
@@ -52,14 +51,6 @@ export class InputController {
       capture: true,
       passive: false,
     });
-
-    // Lower-latency stylus path where the browser exposes Pointer Events Level 3.
-    // Normal pointermove remains the path for touch/mouse and the fallback for Pencil.
-    if (this.useRawPenUpdates) {
-      window.addEventListener("pointerrawupdate", (event) => this.onPointerRawUpdate(event), {
-        capture: true,
-      });
-    }
 
     this.canvas.addEventListener("wheel", (event) => this.onWheel(event), { passive: false });
 
@@ -124,7 +115,6 @@ export class InputController {
 
   onPointerMove(event) {
     if (this.pencil.ownsPointer(event.pointerId)) {
-      if (this.useRawPenUpdates) return;
       preventDefault(event);
       this.pencil.move(event);
       return;
@@ -153,11 +143,6 @@ export class InputController {
       preventDefault(event);
       this.movePan(event.clientX, event.clientY);
     }
-  }
-
-  onPointerRawUpdate(event) {
-    if (!this.pencil.ownsPointer(event.pointerId)) return;
-    this.pencil.move(event);
   }
 
   onPointerEnd(event) {
