@@ -12,10 +12,11 @@ export class CanvasRenderer {
     this.baseCtx = this.baseCanvas.getContext("2d");
     this.baseDirty = true;
     this.cachedBaseGeneration = -1;
+    this.cachedBaseView = null;
 
-    // One camera animator handles both automatic writer following and explicit
-    // "go to last writing" navigation. Retargeting an in-flight animation is
-    // cheap and avoids packet-by-packet camera jumps.
+    // One camera animator handles automatic following and explicit navigation.
+    // During animation the completed-ink bitmap is transformed cheaply instead
+    // of being rebuilt on every frame; the final frame is rebuilt sharply.
     this.followHandle = null;
     this.followTarget = null;
     this.followLastTimestamp = null;
@@ -85,17 +86,53 @@ export class CanvasRenderer {
     if (this.cachedBaseGeneration !== this.state.baseGeneration) {
       this.baseDirty = true;
     }
+    if (!this.baseDirty && this.shouldRefreshTransformedBase()) {
+      this.baseDirty = true;
+    }
     if (this.baseDirty) this.rebuildBase();
 
     const ctx = this.ctx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-    ctx.drawImage(this.baseCanvas, 0, 0);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    this.drawCachedBase(ctx);
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
 
     for (const stroke of this.state.listStrokes()) {
       if (!stroke.complete) this.drawStrokeTo(ctx, stroke);
     }
+  }
+
+  drawCachedBase(ctx) {
+    if (!this.cachedBaseView) {
+      ctx.drawImage(this.baseCanvas, 0, 0);
+      return;
+    }
+
+    const ratio = this.view.zoom / this.cachedBaseView.zoom;
+    const translateX = (this.view.x - this.cachedBaseView.x * ratio) * this.dpr;
+    const translateY = (this.view.y - this.cachedBaseView.y * ratio) * this.dpr;
+
+    ctx.save();
+    ctx.setTransform(ratio, 0, 0, ratio, translateX, translateY);
+    ctx.drawImage(this.baseCanvas, 0, 0);
+    ctx.restore();
+  }
+
+  shouldRefreshTransformedBase() {
+    if (!this.cachedBaseView || !this.followTarget) return false;
+    const ratio = this.view.zoom / this.cachedBaseView.zoom;
+    const { width, height } = this.getViewportSize();
+    const shiftX = this.view.x - this.cachedBaseView.x * ratio;
+    const shiftY = this.view.y - this.cachedBaseView.y * ratio;
+
+    // Refresh occasionally during a large trip so newly revealed areas do not
+    // stay outside the cached bitmap, while still avoiding per-frame rebuilds.
+    return ratio < 0.72
+      || ratio > 1.38
+      || Math.abs(shiftX) > width * 0.20
+      || Math.abs(shiftY) > height * 0.20;
   }
 
   rebuildBase() {
@@ -113,6 +150,7 @@ export class CanvasRenderer {
     }
     this.baseDirty = false;
     this.cachedBaseGeneration = this.state.baseGeneration;
+    this.cachedBaseView = { ...this.view };
   }
 
   drawGridTo(ctx, width, height) {
@@ -270,7 +308,6 @@ export class CanvasRenderer {
     this.view.x += remainingX * alpha;
     this.view.y += remainingY * alpha;
     this.view.zoom += remainingZoom * alpha;
-    this.invalidateBase();
     this.renderFollowFrame();
 
     const afterX = this.followTarget.x - this.view.x;
@@ -298,12 +335,14 @@ export class CanvasRenderer {
   }
 
   cancelFollowAnimation() {
+    const wasAnimating = this.followHandle !== null || this.followTarget !== null;
     if (this.followHandle !== null) {
       cancelAnimationFrame(this.followHandle);
       this.followHandle = null;
     }
     this.followTarget = null;
     this.followLastTimestamp = null;
+    if (wasAnimating) this.invalidateBase();
   }
 
   panBy(dx, dy) {
@@ -336,6 +375,7 @@ export class CanvasRenderer {
   }
 
   exportPng() {
+    this.invalidateBase();
     this.render();
     const anchor = document.createElement("a");
     anchor.href = this.canvas.toDataURL("image/png");
