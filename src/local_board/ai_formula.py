@@ -1,27 +1,46 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
 import httpx
 
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
-# Fast, vision-capable OpenRouter endpoint whose model slug itself is explicitly
-# free. Never silently route formula OCR to a paid model.
+
+# Primary route is deliberately the fastest free multimodal model we currently
+# use. Free endpoints can be flaky, so every request may fail over to other
+# explicitly-free vision routes. Never silently send a paid request.
 DEFAULT_FORMULA_MODEL = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+FREE_FORMULA_FALLBACK_MODELS = (
+    "dots-studio/dots-3-note-preview:free",
+    "openrouter/free",
+)
 LEGACY_PAID_FORMULA_MODELS = {"stealth/ox-alpha"}
+ALLOWED_FREE_ROUTERS = {"openrouter/free"}
+
 MAX_FORMULA_IMAGE_CHARS = 3_500_000
 MAX_LATEX_CHARS = 4096
-MAX_OUTPUT_TOKENS = 192
+MAX_OUTPUT_TOKENS = 160
+NO_FORMULA_TOKEN = "__NO_FORMULA__"
+PER_ATTEMPT_TIMEOUT_SECONDS = 3.5
+TRANSIENT_HTTP_STATUSES = {408, 409, 425, 429, 500, 502, 503, 504}
 _IMAGE_DATA_URL_RE = re.compile(r"^data:image/(png|jpeg|webp);base64,[A-Za-z0-9+/=\r\n]+$")
 
-# Reuse connections between OCR requests. Creating a fresh TLS connection for
-# every tiny formula is noticeable in an interactive whiteboard.
+logger = logging.getLogger(__name__)
 _http_client: httpx.AsyncClient | None = None
 
 
 class FormulaRecognitionError(RuntimeError):
+    pass
+
+
+class FormulaNotFoundError(FormulaRecognitionError):
+    pass
+
+
+class FormulaProviderUnavailableError(FormulaRecognitionError):
     pass
 
 
@@ -42,13 +61,24 @@ def validate_free_formula_model(model: str) -> str:
     # as a migration signal and replace it locally; never send a paid request.
     if value in LEGACY_PAID_FORMULA_MODELS:
         return DEFAULT_FORMULA_MODEL
-    # Keep this feature financially fail-closed. An explicit :free model is the
-    # only accepted custom override; a typo can never fall through to paid use.
+    if value in ALLOWED_FREE_ROUTERS:
+        return value
     if not value.endswith(":free"):
         raise FormulaRecognitionError(
             "OPENROUTER_FORMULA_MODEL must be an explicit :free model"
         )
     return value
+
+
+def formula_model_candidates(model: str) -> list[str]:
+    primary = validate_free_formula_model(model)
+    ordered = [primary, *FREE_FORMULA_FALLBACK_MODELS]
+    result: list[str] = []
+    for candidate in ordered:
+        candidate = validate_free_formula_model(candidate)
+        if candidate not in result:
+            result.append(candidate)
+    return result
 
 
 async def recognize_formula(
@@ -58,17 +88,65 @@ async def recognize_formula(
     model: str = DEFAULT_FORMULA_MODEL,
 ) -> dict[str, Any]:
     image_data_url = validate_formula_image_data_url(image_data_url)
-    model = validate_free_formula_model(model)
     if not api_key:
         raise FormulaRecognitionError("OPENROUTER_API_KEY is not configured")
 
-    # Keep the prompt and expected output deliberately tiny. Formula OCR does
-    # not need chain-of-thought; fewer output tokens materially improve latency.
+    candidates = formula_model_candidates(model)
+    failures: list[str] = []
+    saw_no_formula = False
+
+    for index, candidate in enumerate(candidates):
+        try:
+            result = await _recognize_with_model(
+                image_data_url,
+                api_key=api_key,
+                model=candidate,
+            )
+        except FormulaNotFoundError as exc:
+            saw_no_formula = True
+            failures.append(f"{candidate}: no formula")
+            logger.info("Formula OCR found no formula with %s", candidate)
+            continue
+        except FormulaProviderUnavailableError as exc:
+            failures.append(f"{candidate}: {exc}")
+            logger.warning("Formula OCR provider failed (%s): %s", candidate, exc)
+            continue
+        except FormulaRecognitionError as exc:
+            # A model-specific malformed response/unsupported parameter should
+            # not take the board down if another free vision model can answer.
+            failures.append(f"{candidate}: {exc}")
+            logger.warning("Formula OCR model failed (%s): %s", candidate, exc)
+            continue
+
+        result["fallback_index"] = index
+        result["attempted_models"] = candidates[: index + 1]
+        if index:
+            logger.info("Formula OCR succeeded via free fallback %s", candidate)
+        return result
+
+    if saw_no_formula:
+        raise FormulaNotFoundError("В выделенной области не удалось найти формулу")
+
+    compact = "; ".join(failures[-3:])
+    raise FormulaProviderUnavailableError(
+        "Бесплатные OCR-модели временно недоступны"
+        + (f": {compact}" if compact else "")
+    )
+
+
+async def _recognize_with_model(
+    image_data_url: str,
+    *,
+    api_key: str,
+    model: str,
+) -> dict[str, Any]:
     prompt = (
-        "OCR only. Read the handwritten/printed mathematical expression in this crop. "
-        "Return ONLY valid MathJax LaTeX, with no dollar signs, code fence, JSON, "
-        "explanation, solution, or commentary. Preserve symbols, superscripts, "
-        "subscripts, fractions, roots, integrals, sums, brackets and relations exactly."
+        "Fast mathematical OCR only. Read the handwritten or printed mathematical "
+        "expression in this crop and return ONLY valid MathJax LaTeX. Do not solve, "
+        "simplify, explain, or add markdown/dollar signs. Preserve symbols, powers, "
+        "subscripts, fractions, roots, integrals, sums, brackets and relations exactly. "
+        "A graph may contain a formula label; transcribe the label if clearly present. "
+        f"If there is no recognizable mathematical expression, return exactly {NO_FORMULA_TOKEN}."
     )
 
     payload = {
@@ -84,13 +162,9 @@ async def recognize_formula(
         ],
         "max_tokens": MAX_OUTPUT_TOKENS,
         "temperature": 0,
-        # The selected free Nemotron can use extended reasoning when explicitly
-        # requested. Formula OCR is a latency-sensitive perception task, so keep
-        # it off. OpenRouter ignores unsupported optional reasoning controls.
-        "reasoning": {"enabled": False},
         "provider": {
             "sort": "latency",
-            "allow_fallbacks": False,
+            "allow_fallbacks": True,
         },
     }
     headers = {
@@ -102,23 +176,42 @@ async def recognize_formula(
 
     try:
         client = _get_http_client()
-        response = await client.post(OPENROUTER_CHAT_URL, headers=headers, json=payload)
+        response = await client.post(
+            OPENROUTER_CHAT_URL,
+            headers=headers,
+            json=payload,
+            timeout=httpx.Timeout(PER_ATTEMPT_TIMEOUT_SECONDS, connect=2.0),
+        )
+    except (httpx.TimeoutException, httpx.NetworkError) as exc:
+        raise FormulaProviderUnavailableError("timeout/network error") from exc
     except httpx.HTTPError as exc:
-        raise FormulaRecognitionError("OpenRouter is unreachable") from exc
+        raise FormulaProviderUnavailableError("OpenRouter is unreachable") from exc
 
     if response.status_code >= 400:
         detail = _openrouter_error_detail(response)
-        raise FormulaRecognitionError(f"OpenRouter error {response.status_code}: {detail}")
+        if response.status_code in {401, 403}:
+            raise FormulaRecognitionError(
+                f"OpenRouter authentication error {response.status_code}: {detail}"
+            )
+        if response.status_code in TRANSIENT_HTTP_STATUSES:
+            raise FormulaProviderUnavailableError(
+                f"OpenRouter {response.status_code}: {detail}"
+            )
+        raise FormulaRecognitionError(
+            f"OpenRouter error {response.status_code}: {detail}"
+        )
 
     try:
         data = response.json()
         content = data["choices"][0]["message"]["content"]
     except (ValueError, KeyError, IndexError, TypeError) as exc:
-        raise FormulaRecognitionError("OpenRouter returned an invalid response") from exc
+        raise FormulaRecognitionError("invalid OpenRouter response") from exc
 
     latex = extract_latex(content)
+    if is_no_formula_response(latex):
+        raise FormulaNotFoundError("no formula")
     if not latex:
-        raise FormulaRecognitionError("model returned an empty formula")
+        raise FormulaRecognitionError("empty model response")
     if len(latex) > MAX_LATEX_CHARS:
         raise FormulaRecognitionError("recognized formula is too large")
 
@@ -151,7 +244,6 @@ def extract_latex(content: Any) -> str:
     if text.startswith("```"):
         text = re.sub(r"^```(?:latex|tex|json)?\s*", "", text, flags=re.IGNORECASE)
         text = re.sub(r"\s*```$", "", text)
-    # Keep compatibility with an older JSON-producing OCR configuration.
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
@@ -162,15 +254,25 @@ def extract_latex(content: Any) -> str:
     return text
 
 
+def is_no_formula_response(value: Any) -> bool:
+    text = str(value or "").strip().lower().replace(" ", "_")
+    return text in {
+        NO_FORMULA_TOKEN.lower(),
+        "no_formula",
+        "no_formula_found",
+        "no_recognizable_formula",
+    }
+
+
 def _openrouter_error_detail(response: httpx.Response) -> str:
     try:
         payload = response.json()
         if isinstance(payload, dict):
             error = payload.get("error")
             if isinstance(error, dict) and error.get("message"):
-                return str(error["message"])[:300]
+                return str(error["message"])[:220]
             if error:
-                return str(error)[:300]
+                return str(error)[:220]
     except ValueError:
         pass
-    return (response.text or "request failed")[:300]
+    return (response.text or "request failed")[:220]
