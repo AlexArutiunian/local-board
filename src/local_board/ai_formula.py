@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
@@ -11,36 +10,31 @@ import httpx
 
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-# Formula OCR needs a model that is actually good at visual mathematics.
-# Qwen2.5-VL-32B is explicitly free on OpenRouter and is tuned for mathematical
-# reasoning / MathVista-style visual tasks. 72B is a deterministic free fallback.
-DEFAULT_FORMULA_MODEL = "qwen/qwen2.5-vl-32b-instruct:free"
-FREE_FORMULA_FALLBACK_MODELS = (
-    "qwen/qwen2.5-vl-72b-instruct:free",
-)
+# Ox Alpha is currently free on OpenRouter, accepts image input and has a single
+# highly-available provider. For interactive whiteboard OCR, predictable quality
+# is more important than racing unrelated free models and accepting the first
+# answer (which previously allowed safety-model text to reach the board).
+DEFAULT_FORMULA_MODEL = "stealth/ox-alpha"
 
-# Values used by older revisions. Migrate them automatically so a stale .env
-# cannot keep selecting a rate-limited or low-quality route after git pull.
+# Old values from previous experiments are intentionally migrated back to Ox.
+# This keeps existing local .env files working after git pull.
 LEGACY_FORMULA_MODELS = {
-    "stealth/ox-alpha",
     "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+    "nvidia/nemotron-nano-12b-v2-vl:free",
     "dots-studio/dots-3-note-preview:free",
     "openrouter/free",
     "google/gemma-4-31b-it-20260402:free",
     "google/gemma-4-31b-it:free",
     "google/gemma-4-26b-a4b-it:free",
+    "qwen/qwen2.5-vl-32b-instruct:free",
+    "qwen/qwen2.5-vl-72b-instruct:free",
 }
 
-MAX_FORMULA_IMAGE_CHARS = 3_500_000
-MAX_LATEX_CHARS = 4096
-MAX_OUTPUT_TOKENS = 96
+MAX_FORMULA_IMAGE_CHARS = 2_000_000
+MAX_LATEX_CHARS = 2048
+MAX_OUTPUT_TOKENS = 48
 NO_FORMULA_TOKEN = "__NO_FORMULA__"
-
-# Give the math-focused 32B model the first shot. If it is slow, hedge to 72B.
-# If 32B returns a provider 429/5xx, 72B starts immediately instead of waiting.
-FALLBACK_HEDGE_SECONDS = 1.0
-PER_ATTEMPT_TIMEOUT_SECONDS = 3.2
-TOTAL_OCR_TIMEOUT_SECONDS = 4.0
+REQUEST_TIMEOUT_SECONDS = 9.0
 TRANSIENT_HTTP_STATUSES = {408, 409, 425, 429, 500, 502, 503, 504}
 _IMAGE_DATA_URL_RE = re.compile(r"^data:image/(png|jpeg|webp);base64,[A-Za-z0-9+/=\r\n]+$")
 
@@ -73,22 +67,20 @@ def validate_free_formula_model(model: str) -> str:
     value = str(model or "").strip()
     if not value or value in LEGACY_FORMULA_MODELS:
         return DEFAULT_FORMULA_MODEL
-    if not value.endswith(":free"):
-        raise FormulaRecognitionError(
-            "OPENROUTER_FORMULA_MODEL must be an explicit :free model"
-        )
-    return value
+    # Ox Alpha is free even though its slug does not end in :free.
+    if value == DEFAULT_FORMULA_MODEL:
+        return value
+    # Keep custom overrides financially fail-closed.
+    if value.endswith(":free"):
+        return value
+    raise FormulaRecognitionError(
+        "OPENROUTER_FORMULA_MODEL must be stealth/ox-alpha or an explicit :free model"
+    )
 
 
 def formula_model_candidates(model: str) -> list[str]:
-    primary = validate_free_formula_model(model)
-    ordered = [primary, *FREE_FORMULA_FALLBACK_MODELS]
-    result: list[str] = []
-    for candidate in ordered:
-        candidate = validate_free_formula_model(candidate)
-        if candidate not in result:
-            result.append(candidate)
-    return result
+    # No heterogeneous race/fallback: one model = one deterministic OCR result.
+    return [validate_free_formula_model(model)]
 
 
 async def recognize_formula(
@@ -98,100 +90,15 @@ async def recognize_formula(
     model: str = DEFAULT_FORMULA_MODEL,
 ) -> dict[str, Any]:
     image_data_url = validate_formula_image_data_url(image_data_url)
+    model = validate_free_formula_model(model)
     if not api_key:
         raise FormulaRecognitionError("OPENROUTER_API_KEY is not configured")
 
-    candidates = formula_model_candidates(model)
     started = time.perf_counter()
-    active: dict[asyncio.Task, str] = {}
-    launched: list[str] = []
-    failures: list[str] = []
-    saw_no_formula = False
-    fallback_started = False
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + TOTAL_OCR_TIMEOUT_SECONDS
-    hedge_at = loop.time() + FALLBACK_HEDGE_SECONDS
-
-    def launch(candidate: str) -> None:
-        task = asyncio.create_task(
-            _recognize_with_model(image_data_url, api_key=api_key, model=candidate)
-        )
-        active[task] = candidate
-        launched.append(candidate)
-
-    launch(candidates[0])
-
-    try:
-        while active:
-            now = loop.time()
-            if now >= deadline:
-                break
-
-            next_wake = deadline
-            if not fallback_started and len(candidates) > 1:
-                next_wake = min(next_wake, hedge_at)
-
-            done, _ = await asyncio.wait(
-                active.keys(),
-                timeout=max(0.0, next_wake - now),
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-
-            if not done:
-                if not fallback_started and len(candidates) > 1:
-                    launch(candidates[1])
-                    fallback_started = True
-                    logger.info("Formula OCR hedged to %s", candidates[1])
-                continue
-
-            for task in done:
-                candidate = active.pop(task)
-                try:
-                    result = task.result()
-                except FormulaNotFoundError:
-                    saw_no_formula = True
-                    failures.append(f"{candidate}: no formula")
-                    if not fallback_started and len(candidates) > 1:
-                        launch(candidates[1])
-                        fallback_started = True
-                    continue
-                except FormulaProviderUnavailableError as exc:
-                    failures.append(f"{candidate}: {exc}")
-                    logger.warning("Formula OCR provider failed (%s): %s", candidate, exc)
-                    if not fallback_started and len(candidates) > 1:
-                        launch(candidates[1])
-                        fallback_started = True
-                    continue
-                except FormulaRecognitionError as exc:
-                    failures.append(f"{candidate}: {exc}")
-                    logger.warning("Formula OCR rejected response (%s): %s", candidate, exc)
-                    if not fallback_started and len(candidates) > 1:
-                        launch(candidates[1])
-                        fallback_started = True
-                    continue
-                except asyncio.CancelledError:
-                    continue
-
-                elapsed_ms = round((time.perf_counter() - started) * 1000)
-                result["attempted_models"] = list(launched)
-                result["elapsed_ms"] = elapsed_ms
-                logger.info("Formula OCR succeeded via %s in %dms", candidate, elapsed_ms)
-                return result
-
-        if saw_no_formula:
-            raise FormulaNotFoundError("В выделенной области не удалось найти формулу")
-
-        compact = "; ".join(failures[-2:])
-        raise FormulaProviderUnavailableError(
-            "Бесплатные Qwen OCR-модели сейчас ограничены/недоступны"
-            + (f": {compact}" if compact else "")
-        )
-    finally:
-        pending = list(active.keys())
-        for task in pending:
-            task.cancel()
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
+    result = await _recognize_with_model(image_data_url, api_key=api_key, model=model)
+    result["attempted_models"] = [model]
+    result["elapsed_ms"] = round((time.perf_counter() - started) * 1000)
+    return result
 
 
 async def _recognize_with_model(
@@ -200,13 +107,12 @@ async def _recognize_with_model(
     api_key: str,
     model: str,
 ) -> dict[str, Any]:
+    # Deliberately tiny prompt/output. This task is visual transcription, not
+    # mathematical reasoning. Asking for one bare LaTeX string minimizes decode.
     prompt = (
-        "Mathematical OCR only. Transcribe EXACTLY the handwritten or printed "
-        "mathematical expression visible in this crop into MathJax LaTeX. "
-        "Do not solve, simplify, explain, classify safety, or add prose. Preserve "
-        "coefficients, variables, exponents, subscripts, signs, brackets, fractions, "
-        "roots, integrals, sums and relations exactly as drawn. Return ONLY the LaTeX "
-        f"expression, without $ delimiters. If there is no formula, return {NO_FORMULA_TOKEN}."
+        "OCR the handwritten math in this crop. Return ONLY the exact MathJax LaTeX, "
+        "no explanation, no solving, no markdown, no $ delimiters. Preserve every "
+        "symbol exactly. If no formula is visible return __NO_FORMULA__."
     )
 
     payload = {
@@ -222,6 +128,9 @@ async def _recognize_with_model(
         ],
         "max_tokens": MAX_OUTPUT_TOKENS,
         "temperature": 0,
+        # Ox is a reasoning model, but OCR does not benefit from a long thinking
+        # trace. OpenRouter/provider may ignore unsupported controls safely.
+        "reasoning": {"effort": "low", "exclude": True},
         "provider": {
             "sort": "latency",
             "allow_fallbacks": True,
@@ -240,10 +149,10 @@ async def _recognize_with_model(
             OPENROUTER_CHAT_URL,
             headers=headers,
             json=payload,
-            timeout=httpx.Timeout(PER_ATTEMPT_TIMEOUT_SECONDS, connect=1.5),
+            timeout=httpx.Timeout(REQUEST_TIMEOUT_SECONDS, connect=1.5),
         )
     except (httpx.TimeoutException, httpx.NetworkError) as exc:
-        raise FormulaProviderUnavailableError("timeout/network error") from exc
+        raise FormulaProviderUnavailableError("Ox Alpha timeout/network error") from exc
     except httpx.HTTPError as exc:
         raise FormulaProviderUnavailableError("OpenRouter is unreachable") from exc
 
@@ -255,7 +164,7 @@ async def _recognize_with_model(
             )
         if response.status_code in TRANSIENT_HTTP_STATUSES:
             raise FormulaProviderUnavailableError(
-                f"OpenRouter {response.status_code}: {detail}"
+                f"Ox Alpha temporarily unavailable ({response.status_code}): {detail}"
             )
         raise FormulaRecognitionError(
             f"OpenRouter error {response.status_code}: {detail}"
@@ -269,7 +178,7 @@ async def _recognize_with_model(
 
     latex = extract_latex(content)
     if is_no_formula_response(latex):
-        raise FormulaNotFoundError("no formula")
+        raise FormulaNotFoundError("В выделенной области не удалось найти формулу")
     if not latex:
         raise FormulaRecognitionError("model returned an empty formula")
     if looks_like_non_formula_output(latex):
@@ -291,8 +200,9 @@ def _get_http_client() -> httpx.AsyncClient:
     global _http_client
     if _http_client is None or _http_client.is_closed:
         _http_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(8.0, connect=2.0),
+            timeout=httpx.Timeout(REQUEST_TIMEOUT_SECONDS, connect=1.5),
             limits=httpx.Limits(max_keepalive_connections=4, max_connections=8),
+            http2=False,
         )
     return _http_client
 
