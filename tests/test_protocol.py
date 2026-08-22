@@ -13,12 +13,31 @@ def test_normalizes_stroke_begin():
                 "color": "#111111",
                 "width": 4,
                 "pointer_type": "pen",
+                "source_zoom": 0.65,
                 "points": [{"x": 1, "y": 2, "pressure": 0.8}],
             },
         }
     )
     assert event["stroke"]["id"] == "stroke-1"
     assert event["stroke"]["points"][0]["pressure"] == 0.8
+    assert event["stroke"]["source_zoom"] == 0.65
+
+
+def test_clamps_source_zoom_metadata():
+    event = normalize_client_event(
+        {
+            "type": "stroke.begin",
+            "op_id": "op-zoom",
+            "stroke": {
+                "id": "stroke-zoom",
+                "color": "#111111",
+                "width": 4,
+                "source_zoom": 99,
+                "points": [{"x": 1, "y": 2}],
+            },
+        }
+    )
+    assert event["stroke"]["source_zoom"] == 5.0
 
 
 def test_rejects_unknown_event():
