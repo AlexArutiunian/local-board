@@ -20,13 +20,17 @@
           <div><strong>Local Board</strong><span id="boardName" class="board-name">room</span></div>
         </a>
         <div class="topbar-card topbar-actions">
-          <div class="presence" aria-live="polite">
+          <button id="profileButton" class="participant-self" type="button" title="Изменить имя или роль">
+            <span id="selfRole" class="role-badge student">Ученик</span>
+            <span id="selfName" class="self-name">Участник</span>
+          </button>
+          <button id="presenceTrigger" class="presence presence-button" type="button" aria-expanded="false" title="Кто сейчас в комнате">
             <span id="connectionDot" class="presence-dot offline"></span>
             <span id="connectionText">Подключение…</span>
             <span class="separator">•</span>
             <span id="participants">0 участников</span>
-          </div>
-          <button id="shareRoom" class="share-room" type="button" title="Скопировать ссылку на комнату">Поделиться</button>
+          </button>
+          <button id="shareRoom" class="share-room" type="button" title="Пригласить в комнату" aria-expanded="false">Поделиться</button>
         </div>
       </header>
 
@@ -49,6 +53,9 @@
           </button>
           <button id="imageInsert" class="icon-button" title="Добавить изображение (можно также вставить или перетащить)" aria-label="Добавить изображение">
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="9" r="1.5"/><path d="m4 17 4.5-4.5 3.5 3 2.5-2.5 5.5 5"/></svg>
+          </button>
+          <button id="backgroundTrigger" class="icon-button" type="button" title="Фон и разлиновка" aria-label="Фон и разлиновка" aria-expanded="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M7 8h10M7 12h10M7 16h10"/></svg>
           </button>
           <input id="imageInput" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple />
         </div>
@@ -102,9 +109,37 @@
         <label class="custom-color-row"><span>Свой цвет</span><input id="customColor" type="color" value="#111111" aria-label="Выбрать произвольный цвет" /></label>
       </div>
 
+      <div id="backgroundPopover" class="board-popover background-popover hidden" role="dialog" aria-label="Фон и разлиновка">
+        <div class="popover-title">Разлиновка</div>
+        <div class="background-pattern-grid">
+          <button data-background-pattern="plain"><span class="paper-preview preview-plain"></span><span>Чистый</span></button>
+          <button data-background-pattern="dots"><span class="paper-preview preview-dots"></span><span>Точки</span></button>
+          <button data-background-pattern="grid"><span class="paper-preview preview-grid"></span><span>Клетка</span></button>
+          <button data-background-pattern="fine-grid"><span class="paper-preview preview-fine-grid"></span><span>Мелкая</span></button>
+          <button data-background-pattern="ruled"><span class="paper-preview preview-ruled"></span><span>Линейка</span></button>
+          <button data-background-pattern="cornell"><span class="paper-preview preview-cornell"></span><span>Cornell</span></button>
+          <button data-background-pattern="isometric"><span class="paper-preview preview-isometric"></span><span>Изометрия</span></button>
+        </div>
+        <div class="popover-title background-tone-title">Бумага</div>
+        <div class="background-tone-row" role="group" aria-label="Цвет бумаги">
+          <button data-background-tone="white" style="--paper:#fff" title="Белый"></button>
+          <button data-background-tone="warm" style="--paper:#fffaf0" title="Тёплый"></button>
+          <button data-background-tone="gray" style="--paper:#f4f4f5" title="Серый"></button>
+          <button data-background-tone="blue" style="--paper:#f5f9ff" title="Голубой"></button>
+          <button data-background-tone="green" style="--paper:#f5fbf7" title="Мятный"></button>
+        </div>
+      </div>
+
       <div id="morePopover" class="board-popover action-popover hidden" role="menu" aria-label="Дополнительные действия">
         <button id="exportPng" class="popover-action" role="menuitem">Сохранить текущий вид как PNG</button>
         <button id="clearBoard" class="popover-action danger" role="menuitem">Очистить всю доску</button>
+      </div>
+
+      <div id="presencePopover" class="top-popover presence-popover hidden" role="dialog" aria-label="Участники комнаты"></div>
+      <div id="sharePopover" class="top-popover share-popover hidden" role="dialog" aria-label="Пригласить в комнату">
+        <div class="popover-title">Пригласить</div>
+        <button id="copyStudentLink" class="share-link-option" type="button"><strong>Ссылка ученику</strong><span>Откроется как «Ученик»</span></button>
+        <button id="copyTeacherLink" class="share-link-option" type="button"><strong>Ссылка преподавателя</strong><span>Для твоего второго устройства</span></button>
       </div>
 
       <div id="boardToast" class="board-toast hidden" role="status" aria-live="polite"></div>
