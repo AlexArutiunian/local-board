@@ -57,6 +57,7 @@ export function shareUrlForRole(boardId, role, teacherName = "") {
 
 function buildProfile(role, name) {
   saveProfile(role, name);
+  document.documentElement.dataset.participantRole = role;
   return { role, name, device: deviceLabel() };
 }
 
