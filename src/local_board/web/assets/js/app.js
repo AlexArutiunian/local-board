@@ -87,13 +87,7 @@ function bindToolbar() {
     });
   });
 
-  document.querySelectorAll("[data-color]").forEach((button) => {
-    button.addEventListener("click", () => {
-      document.querySelectorAll("[data-color]").forEach((item) => item.classList.toggle("active", item === button));
-      input.setColor(button.dataset.color);
-      if (input.tool !== "pen") document.querySelector('[data-tool="pen"]').click();
-    });
-  });
+  bindColorPicker();
 
   const widthInput = document.getElementById("width");
   const widthLabel = document.getElementById("widthLabel");
@@ -109,6 +103,93 @@ function bindToolbar() {
   document.getElementById("exportPng").addEventListener("click", () => renderer.exportPng());
   document.getElementById("clearBoard").addEventListener("click", clearBoard);
   document.getElementById("shareRoom").addEventListener("click", copyRoomLink);
+}
+
+function bindColorPicker() {
+  const trigger = document.getElementById("colorTrigger");
+  const popover = document.getElementById("colorPopover");
+  const swatch = document.getElementById("currentColorSwatch");
+  const customColor = document.getElementById("customColor");
+  const paletteButtons = [...document.querySelectorAll(".color-option[data-color]")];
+  const toolbar = document.querySelector(".toolbar");
+
+  const savedColor = loadPenColor();
+  applyColor(savedColor, { persist: false, switchToPen: false });
+
+  trigger.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const opening = popover.classList.contains("hidden");
+    if (opening) openPopover();
+    else closePopover();
+  });
+
+  paletteButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      applyColor(button.dataset.color);
+      closePopover();
+    });
+  });
+
+  customColor.addEventListener("input", () => applyColor(customColor.value));
+  customColor.addEventListener("change", () => closePopover());
+
+  document.addEventListener("pointerdown", (event) => {
+    if (popover.classList.contains("hidden")) return;
+    if (popover.contains(event.target) || trigger.contains(event.target)) return;
+    closePopover();
+  }, { capture: true });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closePopover();
+  });
+
+  window.addEventListener("resize", () => {
+    if (!popover.classList.contains("hidden")) positionPopover();
+  });
+  toolbar?.addEventListener("scroll", closePopover, { passive: true });
+
+  function openPopover() {
+    popover.classList.remove("hidden");
+    trigger.setAttribute("aria-expanded", "true");
+    positionPopover();
+  }
+
+  function closePopover() {
+    popover.classList.add("hidden");
+    trigger.setAttribute("aria-expanded", "false");
+  }
+
+  function positionPopover() {
+    const stage = document.getElementById("stage");
+    const stageRect = stage.getBoundingClientRect();
+    const triggerRect = trigger.getBoundingClientRect();
+    const popoverWidth = popover.offsetWidth || 226;
+    const half = popoverWidth / 2;
+    const rawCenter = triggerRect.left - stageRect.left + triggerRect.width / 2;
+    const center = clamp(rawCenter, half + 10, stageRect.width - half - 10);
+    const bottom = Math.max(10, stageRect.bottom - triggerRect.top + 10);
+
+    popover.style.left = `${center}px`;
+    popover.style.bottom = `${bottom}px`;
+  }
+
+  function applyColor(color, { persist = true, switchToPen = true } = {}) {
+    if (!isHexColor(color)) return;
+    const normalized = color.toLowerCase();
+    input.setColor(normalized);
+    swatch.style.setProperty("--c", normalized);
+    customColor.value = normalized;
+    trigger.setAttribute("aria-label", `Цвет линии: ${normalized}`);
+
+    paletteButtons.forEach((button) => {
+      button.classList.toggle("active", button.dataset.color.toLowerCase() === normalized);
+    });
+
+    if (persist) savePenColor(normalized);
+    if (switchToPen && input.tool !== "pen") {
+      document.querySelector('[data-tool="pen"]')?.click();
+    }
+  }
 }
 
 function undoLocalStroke() {
@@ -243,6 +324,7 @@ function bindRemoteFollowInteractionGuards(targetCanvas, follow) {
   targetCanvas.addEventListener("wheel", note, { capture: true, passive: true });
 
   document.querySelector(".toolbar")?.addEventListener("pointerdown", note, { capture: true, passive: true });
+  document.querySelector(".board-popover")?.addEventListener("pointerdown", note, { capture: true, passive: true });
 }
 
 function bindInputDiagnostics(targetCanvas, debug) {
@@ -291,6 +373,28 @@ function bindInputDiagnostics(targetCanvas, debug) {
   }
 
   debug.note(`ua ${navigator.userAgent}`);
+}
+
+function loadPenColor() {
+  try {
+    const stored = localStorage.getItem("local-board:pen-color");
+    if (isHexColor(stored)) return stored.toLowerCase();
+  } catch (_) {}
+  return "#111111";
+}
+
+function savePenColor(color) {
+  try {
+    localStorage.setItem("local-board:pen-color", color);
+  } catch (_) {}
+}
+
+function isHexColor(value) {
+  return typeof value === "string" && /^#[0-9a-fA-F]{6}$/.test(value);
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }
 
 function resolveBoardId() {
