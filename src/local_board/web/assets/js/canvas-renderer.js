@@ -13,6 +13,7 @@ export class CanvasRenderer {
     this.onViewChange = null;
     this.selectionKeys = new Set();
     this.marquee = null;
+    this.cropOverlay = null;
 
     this.imageCache = new ImageCache(() => {
       this.invalidateBase();
@@ -50,6 +51,13 @@ export class CanvasRenderer {
 
   setMarquee(rect) {
     this.marquee = rect ? normalizeRect(rect) : null;
+    this.requestRender();
+  }
+
+  setCropOverlay(overlay) {
+    this.cropOverlay = overlay?.rect
+      ? { objectId: String(overlay.objectId), rect: normalizeRect(overlay.rect) }
+      : null;
     this.requestRender();
   }
 
@@ -180,7 +188,23 @@ export class CanvasRenderer {
     const image = this.imageCache.get(object.src);
     ctx.save();
     if (image) {
-      ctx.drawImage(image, topLeft.x, topLeft.y, width, height);
+      const naturalWidth = Math.max(1, image.naturalWidth || image.width || 1);
+      const naturalHeight = Math.max(1, image.naturalHeight || image.height || 1);
+      const cropX = clamp(Number(object.crop_x ?? 0), 0, 1);
+      const cropY = clamp(Number(object.crop_y ?? 0), 0, 1);
+      const cropWidth = clamp(Number(object.crop_width ?? 1), 0.01, 1 - cropX);
+      const cropHeight = clamp(Number(object.crop_height ?? 1), 0.01, 1 - cropY);
+      ctx.drawImage(
+        image,
+        cropX * naturalWidth,
+        cropY * naturalHeight,
+        cropWidth * naturalWidth,
+        cropHeight * naturalHeight,
+        topLeft.x,
+        topLeft.y,
+        width,
+        height,
+      );
     } else {
       ctx.fillStyle = "#f5f5f4";
       ctx.strokeStyle = "#d6d3d1";
@@ -250,7 +274,7 @@ export class CanvasRenderer {
       ctx.setLineDash([]);
       ctx.strokeRect(start.x, start.y, width, height);
       const single = this.selectionKeys.size === 1 ? parseItemKey([...this.selectionKeys][0]) : null;
-      if (single?.kind === "object") {
+      if (single?.kind === "object" && !this.cropOverlay) {
         for (const [x, y] of [[start.x, start.y], [start.x + width, start.y], [start.x, start.y + height], [start.x + width, start.y + height]]) {
           ctx.beginPath();
           ctx.arc(x, y, 4.5, 0, Math.PI * 2);
@@ -258,6 +282,54 @@ export class CanvasRenderer {
           ctx.stroke();
         }
       }
+    }
+
+    if (this.cropOverlay) this.drawCropOverlay(ctx);
+    ctx.restore();
+  }
+
+  drawCropOverlay(ctx) {
+    const object = this.state.getObject(this.cropOverlay.objectId);
+    const crop = this.cropOverlay.rect;
+    if (!object || !crop) return;
+    const objectStart = this.worldToScreen(object);
+    const objectWidth = object.width * this.view.zoom;
+    const objectHeight = object.height * this.view.zoom;
+    const cropStart = this.worldToScreen(crop);
+    const cropWidth = crop.width * this.view.zoom;
+    const cropHeight = crop.height * this.view.zoom;
+    const objectRight = objectStart.x + objectWidth;
+    const objectBottom = objectStart.y + objectHeight;
+    const cropRight = cropStart.x + cropWidth;
+    const cropBottom = cropStart.y + cropHeight;
+
+    ctx.save();
+    ctx.fillStyle = "rgba(17,24,39,.42)";
+    ctx.fillRect(objectStart.x, objectStart.y, objectWidth, Math.max(0, cropStart.y - objectStart.y));
+    ctx.fillRect(objectStart.x, cropBottom, objectWidth, Math.max(0, objectBottom - cropBottom));
+    ctx.fillRect(objectStart.x, cropStart.y, Math.max(0, cropStart.x - objectStart.x), cropHeight);
+    ctx.fillRect(cropRight, cropStart.y, Math.max(0, objectRight - cropRight), cropHeight);
+
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(cropStart.x, cropStart.y, cropWidth, cropHeight);
+    ctx.strokeStyle = "#2563eb";
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(cropStart.x, cropStart.y, cropWidth, cropHeight);
+
+    const midX = cropStart.x + cropWidth / 2;
+    const midY = cropStart.y + cropHeight / 2;
+    ctx.fillStyle = "#ffffff";
+    ctx.strokeStyle = "#2563eb";
+    for (const [x, y] of [
+      [cropStart.x, cropStart.y], [midX, cropStart.y], [cropRight, cropStart.y],
+      [cropRight, midY], [cropRight, cropBottom], [midX, cropBottom],
+      [cropStart.x, cropBottom], [cropStart.x, midY],
+    ]) {
+      ctx.beginPath();
+      ctx.rect(x - 4.5, y - 4.5, 9, 9);
+      ctx.fill();
+      ctx.stroke();
     }
     ctx.restore();
   }
