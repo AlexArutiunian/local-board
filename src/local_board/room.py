@@ -76,10 +76,7 @@ class BoardRoom:
         await self.broadcast_presence()
 
     async def broadcast_presence(self) -> None:
-        await self._broadcast(
-            {"type": "presence", "participants": len(self.clients)},
-            exclude=None,
-        )
+        await self._broadcast({"type": "presence", "participants": len(self.clients)}, exclude=None)
 
     async def handle_event(self, client_id: str, event: dict[str, Any]) -> None:
         if event["type"] == "ping":
@@ -102,12 +99,7 @@ class BoardRoom:
 
         await self._ack(client_id, op_id, revision)
         await self._broadcast(
-            {
-                "type": "event",
-                "revision": revision,
-                "actor_id": client_id,
-                "event": event,
-            },
+            {"type": "event", "revision": revision, "actor_id": client_id, "event": event},
             exclude=client_id,
         )
 
@@ -184,6 +176,9 @@ class BoardRoom:
             object_id = raw["id"]
             if object_id in self.objects:
                 raise ProtocolError("object id already exists")
+            expected_prefix = f"/api/boards/{self.board_id}/assets/"
+            if not raw["src"].startswith(expected_prefix):
+                raise ProtocolError("image asset belongs to another room")
             board_object = BoardObject(
                 id=object_id,
                 author_id=client_id,
