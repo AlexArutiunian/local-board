@@ -120,6 +120,7 @@ class BoardRoom:
                 color=raw["color"],
                 width=raw["width"],
                 pointer_type=raw["pointer_type"],
+                source_zoom=raw.get("source_zoom"),
                 points=list(raw["points"]),
                 complete=event_type == "stroke.restore",
             )
