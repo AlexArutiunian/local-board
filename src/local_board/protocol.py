@@ -12,6 +12,7 @@ MIN_SOURCE_ZOOM = 0.2
 MAX_SOURCE_ZOOM = 5.0
 MAX_OBJECT_DIMENSION = 20_000.0
 MAX_TRANSLATION = 100_000.0
+MIN_CROP_SIZE = 0.01
 MUTATION_TYPES = {
     "stroke.begin",
     "stroke.append",
@@ -43,6 +44,14 @@ def _number(value: Any, field: str) -> float:
     if not math.isfinite(value):
         raise ProtocolError(f"invalid {field}")
     return value
+
+
+def _crop_number(value: Any, field: str, *, positive: bool = False) -> float:
+    number = _number(value, field)
+    lower = MIN_CROP_SIZE if positive else 0.0
+    if not lower <= number <= 1.0:
+        raise ProtocolError("invalid object crop")
+    return number
 
 
 def normalize_points(payload: Any, *, max_points: int = MAX_POINTS_PER_BATCH) -> list[dict[str, float]]:
@@ -103,6 +112,12 @@ def normalize_board_object(payload: Any) -> dict[str, Any]:
     if not src.startswith("/api/boards/"):
         raise ProtocolError("invalid object src")
     name = str(payload.get("name", "image"))[:160] or "image"
+    crop_x = _crop_number(payload.get("crop_x", 0.0), "object.crop_x")
+    crop_y = _crop_number(payload.get("crop_y", 0.0), "object.crop_y")
+    crop_width = _crop_number(payload.get("crop_width", 1.0), "object.crop_width", positive=True)
+    crop_height = _crop_number(payload.get("crop_height", 1.0), "object.crop_height", positive=True)
+    if crop_x + crop_width > 1.000001 or crop_y + crop_height > 1.000001:
+        raise ProtocolError("invalid object crop")
     return {
         "id": _nonempty_string(payload.get("id"), "object.id"),
         "kind": kind,
@@ -112,6 +127,10 @@ def normalize_board_object(payload: Any) -> dict[str, Any]:
         "height": height,
         "src": src,
         "name": name,
+        "crop_x": crop_x,
+        "crop_y": crop_y,
+        "crop_width": crop_width,
+        "crop_height": crop_height,
     }
 
 
@@ -126,6 +145,12 @@ def normalize_object_patch(payload: Any) -> dict[str, float]:
         if field in {"width", "height"} and not 1 <= value <= MAX_OBJECT_DIMENSION:
             raise ProtocolError("invalid object dimensions")
         patch[field] = value
+    for field in ("crop_x", "crop_y"):
+        if field in payload:
+            patch[field] = _crop_number(payload[field], f"object.{field}")
+    for field in ("crop_width", "crop_height"):
+        if field in payload:
+            patch[field] = _crop_number(payload[field], f"object.{field}", positive=True)
     if not patch:
         raise ProtocolError("empty object patch")
     return patch
