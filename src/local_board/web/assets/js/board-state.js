@@ -4,6 +4,7 @@ export class BoardState {
     this.order = [];
     this.objects = new Map();
     this.objectOrder = [];
+    this.deletedStrokes = new Map();
     this.revision = 0;
     this.baseGeneration = 0;
   }
@@ -13,6 +14,7 @@ export class BoardState {
     this.order = [];
     this.objects.clear();
     this.objectOrder = [];
+    this.deletedStrokes.clear();
     this.revision = Number(board?.revision || 0);
     for (const raw of board?.strokes || []) {
       const stroke = cloneStroke(raw);
@@ -37,6 +39,7 @@ export class BoardState {
       stroke.author_id = actorId || stroke.author_id || "local";
       stroke.complete = type === "stroke.restore";
       this.strokes.set(stroke.id, stroke);
+      this.deletedStrokes.delete(stroke.id);
       if (!this.order.includes(stroke.id)) this.order.push(stroke.id);
       completedLayerChanged = type === "stroke.restore";
     } else if (type === "stroke.append") {
@@ -51,7 +54,11 @@ export class BoardState {
     } else if (type === "stroke.translate") {
       completedLayerChanged = this.translateStroke(event.stroke_id, event.dx, event.dy, false);
     } else if (type === "stroke.delete") {
-      if (this.strokes.has(event.stroke_id)) completedLayerChanged = true;
+      const stroke = this.strokes.get(event.stroke_id);
+      if (stroke) {
+        completedLayerChanged = true;
+        this.rememberDeletedStroke(stroke);
+      }
       this.strokes.delete(event.stroke_id);
       this.order = this.order.filter((id) => id !== event.stroke_id);
     } else if (type === "object.create") {
@@ -72,10 +79,21 @@ export class BoardState {
       this.order = [];
       this.objects.clear();
       this.objectOrder = [];
+      this.deletedStrokes.clear();
     }
 
     if (completedLayerChanged) this.baseGeneration += 1;
     if (revision !== null) this.revision = Math.max(this.revision, Number(revision) || 0);
+  }
+
+  rememberDeletedStroke(stroke) {
+    const snapshot = cloneStroke(stroke);
+    this.deletedStrokes.delete(snapshot.id);
+    this.deletedStrokes.set(snapshot.id, snapshot);
+    while (this.deletedStrokes.size > 512) {
+      const oldest = this.deletedStrokes.keys().next().value;
+      this.deletedStrokes.delete(oldest);
+    }
   }
 
   translateStroke(id, dx, dy, touchGeneration = true) {
@@ -104,6 +122,7 @@ export class BoardState {
   listStrokes() { return this.order.map((id) => this.strokes.get(id)).filter(Boolean); }
   listObjects() { return this.objectOrder.map((id) => this.objects.get(id)).filter(Boolean); }
   getStroke(id) { return this.strokes.get(id) || null; }
+  getDeletedStroke(id) { return this.deletedStrokes.get(id) || null; }
   getObject(id) { return this.objects.get(id) || null; }
   hasStroke(id) { return this.strokes.has(id); }
   hasObject(id) { return this.objects.has(id); }
