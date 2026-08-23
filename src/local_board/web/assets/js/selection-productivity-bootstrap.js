@@ -1,5 +1,6 @@
 import { FormulaTransformController } from "./formula-transform.js";
 import { InputController } from "./input-controller.js";
+import { installSelectionImageInteractions } from "./selection-image-interactions.js";
 import { installSelectionInteractionV2 } from "./selection-interaction-v2.js";
 import { installSelectionProductivity } from "./selection-productivity.js";
 import { installTouchNavigation } from "./touch-navigation.js";
@@ -23,6 +24,13 @@ if (!InputController.prototype.__selectionProductivityBootstrap) {
       sendEvent: this.sendEvent,
       history,
       showToast: showBoardToast,
+    });
+
+    installSelectionImageInteractions({
+      selection: this.selection,
+      state: this.state,
+      renderer: this.renderer,
+      productivity,
     });
 
     const interaction = installSelectionInteractionV2({
