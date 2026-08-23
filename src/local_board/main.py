@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .ai_formula import (
@@ -17,6 +18,7 @@ from .ai_formula import (
     validate_formula_image_data_url,
 )
 from .config import SETTINGS, WEB_DIR
+from .pdf_export import build_board_pdf
 from .protocol import ProtocolError, normalize_client_event, normalize_participant_profile
 from .room import RoomManager
 from .room_service import RoomService
@@ -64,6 +66,29 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         _require_existing_board(store, board_id)
         room = await rooms.get(board_id)
         return room.snapshot_document()
+
+    @app.get("/api/boards/{board_id}/export.pdf")
+    async def export_board_pdf(board_id: str) -> Response:
+        _require_existing_board(store, board_id)
+        room = await rooms.get(board_id)
+        document = room.snapshot_document()
+        try:
+            data = await asyncio.to_thread(
+                build_board_pdf,
+                board_id,
+                document,
+                asset_path=lambda asset_name: store.asset_path(board_id, asset_name),
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail="failed to export board PDF") from exc
+        return Response(
+            content=data,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="Studybruh-{board_id}.pdf"',
+                "Cache-Control": "no-store",
+            },
+        )
 
     @app.post("/api/boards/{board_id}/assets", status_code=201)
     async def upload_board_asset(board_id: str, request: Request) -> dict[str, str]:
