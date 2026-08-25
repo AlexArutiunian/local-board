@@ -29,6 +29,14 @@ a { color: inherit; }
 .home-brand { display: flex; align-items: center; gap: 11px; text-decoration: none; }
 .home-brand strong { font-size: 15px; letter-spacing: -.01em; }
 .brand-mark { width: 14px; height: 14px; border-radius: 4px; background: #111827; box-shadow: 7px 7px 0 #d4d4d4; }
+.topbar-actions { display: flex; align-items: center; gap: 12px; }
+.assessment-link {
+  color: #404040;
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+}
+.assessment-link:hover { color: #111; text-decoration: underline; }
 
 .dashboard {
   width: min(1180px, calc(100% - 36px));
@@ -138,6 +146,7 @@ a.board-card:hover { transform: translateY(-2px); border-color: #c7c7c7; box-sha
 
 @media (max-width: 760px) {
   .home-topbar { padding-left: 14px; padding-right: 14px; }
+  .assessment-link { font-size: 12px; }
   .dashboard { width: min(100% - 24px, 1180px); padding-top: 30px; }
   .dashboard-heading { grid-template-columns: 1fr; gap: 24px; }
   .boards-grid { grid-template-columns: 1fr; }

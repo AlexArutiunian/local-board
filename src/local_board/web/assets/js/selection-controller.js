@@ -54,7 +54,7 @@ export class SelectionController {
   isCropping() { return this.cropObjectId !== null && this.cropRect !== null; }
 
   setSelection(keys) {
-    const next = new Set((keys || []).filter((key) => this.itemExists(key)));
+    const next = new Set(Array.from(keys || []).filter((key) => this.itemExists(key)));
     if (this.isCropping() && !next.has(objectKey(this.cropObjectId))) this.clearCropState();
     this.selected = next;
     this.renderer.setSelection(this.selected);
@@ -810,11 +810,15 @@ export function composeCropPatch(object, rect) {
     y: rect.y,
     width: rect.width,
     height: rect.height,
-    crop_x: baseX + localX * baseW,
-    crop_y: baseY + localY * baseH,
-    crop_width: localW * baseW,
-    crop_height: localH * baseH,
+    crop_x: stableCropValue(baseX + localX * baseW),
+    crop_y: stableCropValue(baseY + localY * baseH),
+    crop_width: stableCropValue(localW * baseW),
+    crop_height: stableCropValue(localH * baseH),
   };
+}
+
+function stableCropValue(value) {
+  return Math.round(value * 1e12) / 1e12;
 }
 
 function hasAppliedCrop(object) {

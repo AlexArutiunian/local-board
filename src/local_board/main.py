@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from .assessment import build_assessment_router
 from .ai_formula import (
     DEFAULT_FORMULA_MODEL,
     FormulaNotFoundError,
@@ -30,12 +31,14 @@ MAX_AI_REQUEST_BYTES = 6_200_000
 
 def create_app(data_dir: Path | None = None) -> FastAPI:
     app = FastAPI(title="Local Board", version="0.6.0")
-    store = JsonBoardStore(data_dir or SETTINGS.data_dir)
+    resolved_data_dir = data_dir or SETTINGS.data_dir
+    store = JsonBoardStore(resolved_data_dir)
     rooms = RoomManager(store)
     room_service = RoomService(store)
     app.state.store = store
     app.state.rooms = rooms
     app.state.room_service = room_service
+    app.include_router(build_assessment_router(resolved_data_dir))
 
     app.mount("/assets", StaticFiles(directory=WEB_DIR / "assets"), name="assets")
 

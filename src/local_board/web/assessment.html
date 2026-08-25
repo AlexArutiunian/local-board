@@ -1,0 +1,89 @@
+
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Middle ML/CV Assessment</title>
+    <link rel="stylesheet" href="/assets/css/assessment.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/">Studybruh</a>
+      <div>
+        <strong>Middle ML/CV Assessment</strong>
+        <span id="session-label" class="muted"></span>
+      </div>
+      <div id="save-status" class="save-status">Не начато</div>
+    </header>
+
+    <main class="assessment-shell">
+      <section id="intro" class="panel intro">
+        <p class="eyebrow">Проверка уровня</p>
+        <h1>10 блоков по 10 заданий</h1>
+        <p>
+          В тесте есть вопросы с одним и несколькими вариантами, короткие ответы,
+          код и инженерные сценарии. Закрытая часть оценивается автоматически,
+          открытая - по отдельным рубрикам.
+        </p>
+        <div class="notice">
+          <h2>Какие действия сохраняются</h2>
+          <p>
+            После старта журналируются время, переходы между вопросами, изменения
+            ответов, copy/cut/paste на странице, вставленный или скопированный
+            фрагмент до 1000 символов, переключение вкладки, blur/focus окна,
+            контекстное меню, fullscreen и нажатие PrintScreen.
+          </p>
+          <p>
+            Браузер не позволяет надёжно определить системный скриншот и не даёт
+            сайту читать буфер обмена вне событий copy/paste на этой странице.
+          </p>
+        </div>
+        <label class="consent">
+          <input id="consent" type="checkbox" />
+          Я понимаю формат теста и согласен на описанный журнал действий.
+        </label>
+        <button id="start-button" class="primary" disabled>Начать тест</button>
+        <button id="resume-button" class="secondary hidden">Продолжить сохранённую попытку</button>
+        <p id="intro-error" class="error" role="alert"></p>
+      </section>
+
+      <section id="workspace" class="workspace hidden">
+        <aside class="sidebar panel">
+          <div class="progress-copy">
+            <strong id="progress-label">0 / 100</strong>
+            <span>ответов сохранено</span>
+          </div>
+          <div class="progress-track"><div id="progress-bar"></div></div>
+          <nav id="block-nav" aria-label="Блоки теста"></nav>
+          <button id="submit-button" class="danger">Завершить попытку</button>
+        </aside>
+
+        <section class="question-column">
+          <article id="question-card" class="panel question-card"></article>
+          <div class="question-actions">
+            <button id="previous-button" class="secondary">Назад</button>
+            <span id="question-position" class="muted"></span>
+            <button id="next-button" class="primary">Дальше</button>
+          </div>
+        </section>
+      </section>
+
+      <section id="result" class="panel hidden" aria-live="polite"></section>
+    </main>
+
+    <dialog id="submit-dialog">
+      <form method="dialog">
+        <h2>Завершить попытку?</h2>
+        <p id="submit-summary"></p>
+        <div class="dialog-actions">
+          <button value="cancel" class="secondary">Вернуться</button>
+          <button id="confirm-submit" value="confirm" class="danger">Завершить</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script type="module" src="/assets/js/assessment.js"></script>
+  </body>
+</html>
+

@@ -327,6 +327,26 @@ activity/<room>/YYYY-MM-DD.jsonl
 
 This keeps RAM usage effectively constant with lesson length and prevents one ever-growing activity file.
 
+## Middle assessment
+
+Assessment изолирован от состояния realtime-доски и подключается отдельным FastAPI router.
+
+```text
+GET  /assessment
+GET  /api/assessment
+POST /api/assessment/sessions
+PUT  /api/assessment/sessions/<id>/answers/<question-id>
+POST /api/assessment/sessions/<id>/events
+POST /api/assessment/sessions/<id>/submit
+GET  /api/assessment/sessions/<id>/review
+```
+
+Банк содержит 10 блоков по 10 заданий и не отдаёт браузеру answer keys или review rubrics до завершения попытки. Объективная часть оценивается автоматически. Короткие ответы, код и сценарии проверяются человеком по рубрикам.
+
+Answer write использует revision и стабильный `op_id`: повтор одного запроса идемпотентен, а запись со старой revision получает conflict. Session snapshot сохраняется через temporary file и atomic replace.
+
+Telemetry хранится отдельно в append-only JSONL. В session snapshot остаются только bounded event ids для dedupe и агрегированные counters. Сохраняются только события внутри страницы: copy/cut/paste с фрагментом до 1000 символов, visibility/focus, fullscreen, context menu и best-effort PrintScreen key. Браузер не гарантирует обнаружение системного screenshot и не позволяет читать внешний clipboard без события пользователя. Перед началом интерфейс требует явное согласие.
+
 ## Persistence
 
 ```text

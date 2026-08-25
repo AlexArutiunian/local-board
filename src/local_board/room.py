@@ -96,7 +96,9 @@ class BoardRoom:
                 "roster": presence["roster"],
             }
         )
-        await self.broadcast_presence()
+        # The joining client already received the complete roster in its
+        # snapshot. Only existing peers need a separate presence update.
+        await self._broadcast(self.presence_payload(), exclude=client_id)
 
     async def disconnect(self, client_id: str, websocket: WebSocket) -> None:
         current = self.clients.get(client_id)
