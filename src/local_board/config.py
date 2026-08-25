@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEV_SECRET = "local-board-development-secret-change-me-2026"
+DEV_ADMIN_PASSWORD = "local-board-dev-admin"
 
 
 def default_data_dir() -> Path:
@@ -29,6 +30,7 @@ class Settings:
     ).expanduser()
     environment: str = os.environ.get("LOCAL_BOARD_ENV", "development").strip().lower()
     secret_key: str = os.environ.get("LOCAL_BOARD_SECRET_KEY", DEV_SECRET)
+    admin_password: str = os.environ.get("LOCAL_BOARD_ADMIN_PASSWORD", DEV_ADMIN_PASSWORD)
     allowed_hosts: tuple[str, ...] = _allowed_hosts()
     public_base_url: str = os.environ.get("PUBLIC_BASE_URL", "").strip().rstrip("/")
 
@@ -41,6 +43,10 @@ class Settings:
             raise RuntimeError("LOCAL_BOARD_SECRET_KEY must be set in production")
         if len(self.secret_key.encode("utf-8")) < 32:
             raise RuntimeError("LOCAL_BOARD_SECRET_KEY must contain at least 32 bytes")
+        if self.production and self.admin_password == DEV_ADMIN_PASSWORD:
+            raise RuntimeError("LOCAL_BOARD_ADMIN_PASSWORD must be set in production")
+        if len(self.admin_password) < 10:
+            raise RuntimeError("LOCAL_BOARD_ADMIN_PASSWORD must contain at least 10 characters")
 
 
 SETTINGS = Settings()
