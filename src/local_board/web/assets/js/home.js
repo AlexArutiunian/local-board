@@ -9,9 +9,18 @@ const passcodeInput = document.getElementById("passcodeInput");
 const joinError = document.getElementById("joinError");
 const boardsGrid = document.getElementById("boardsGrid");
 const emptyBoards = document.getElementById("emptyBoards");
+const teacherLoginForm = document.getElementById("teacherLoginForm");
+const teacherPassword = document.getElementById("teacherPassword");
+const teacherLoginHint = document.getElementById("teacherLoginHint");
+const teacherLoginError = document.getElementById("teacherLoginError");
+const teacherState = document.getElementById("teacherState");
+const teacherLogout = document.getElementById("teacherLogout");
+let teacherAuthenticated = false;
 
 for (const button of createButtons) button.addEventListener("click", createRoom);
 joinForm.addEventListener("submit", openRoom);
+teacherLoginForm.addEventListener("submit", loginTeacher);
+teacherLogout.addEventListener("click", logoutTeacher);
 roomInput.addEventListener("input", () => {
   roomInput.value = roomInput.value.replace(/\D/g, "").slice(0, 4);
   hideJoinError();
@@ -20,9 +29,87 @@ passcodeInput.addEventListener("input", () => {
   passcodeInput.value = passcodeInput.value.replace(/\D/g, "").slice(0, 6);
   hideJoinError();
 });
+teacherPassword.addEventListener("input", hideTeacherError);
 
 prefillJoin();
-loadRooms();
+await refreshTeacherSession();
+await loadRooms();
+
+async function refreshTeacherSession() {
+  try {
+    const response = await fetch("/api/admin/session", { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = await response.json();
+    teacherAuthenticated = Boolean(payload.authenticated);
+    renderTeacherState(Boolean(payload.required));
+  } catch (error) {
+    console.error("Teacher session failed:", error);
+    teacherAuthenticated = false;
+    renderTeacherState(true);
+  }
+}
+
+function renderTeacherState(required) {
+  const unlocked = teacherAuthenticated || !required;
+  createButtons.forEach((button) => { button.disabled = !unlocked; });
+  teacherLoginForm.classList.toggle("authenticated", unlocked);
+  teacherPassword.disabled = unlocked;
+  teacherLoginForm.querySelector('button[type="submit"]').classList.toggle("hidden", unlocked);
+  teacherLogout.classList.toggle("hidden", !teacherAuthenticated || !required);
+  teacherState.textContent = unlocked ? "Преподаватель" : "Гость";
+  teacherState.classList.toggle("active", unlocked);
+  teacherLoginHint.textContent = unlocked
+    ? "Управление досками открыто на этом устройстве."
+    : "Нужен только для создания и управления досками.";
+  if (unlocked) hideTeacherError();
+}
+
+async function loginTeacher(event) {
+  event.preventDefault();
+  hideTeacherError();
+  const password = teacherPassword.value;
+  if (password.length < 1) {
+    showTeacherError("Введите пароль преподавателя.");
+    return;
+  }
+  const submit = teacherLoginForm.querySelector('button[type="submit"]');
+  submit.disabled = true;
+  try {
+    const response = await fetch("/api/admin/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    if (response.status === 401) {
+      showTeacherError("Неверный пароль преподавателя.");
+      return;
+    }
+    if (response.status === 429) {
+      showTeacherError("Слишком много попыток. Подожди несколько минут.");
+      return;
+    }
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    teacherPassword.value = "";
+    await refreshTeacherSession();
+    await loadRooms();
+  } catch (error) {
+    console.error("Teacher login failed:", error);
+    showTeacherError("Не удалось открыть режим преподавателя.");
+  } finally {
+    submit.disabled = false;
+  }
+}
+
+async function logoutTeacher() {
+  teacherLogout.disabled = true;
+  try {
+    await fetch("/api/admin/logout", { method: "POST" });
+  } finally {
+    teacherLogout.disabled = false;
+    await refreshTeacherSession();
+    await loadRooms();
+  }
+}
 
 async function loadRooms() {
   try {
@@ -69,10 +156,21 @@ function renderRooms(rooms) {
 }
 
 async function createRoom() {
+  if (!teacherAuthenticated) {
+    teacherPassword.focus();
+    showTeacherError("Сначала открой режим преподавателя.");
+    return;
+  }
   for (const button of createButtons) button.disabled = true;
   createStatus.textContent = "Создаю защищённую доску…";
   try {
     const response = await fetch("/api/rooms", { method: "POST" });
+    if (response.status === 401) {
+      teacherAuthenticated = false;
+      await refreshTeacherSession();
+      showTeacherError("Сессия преподавателя закончилась. Войди снова.");
+      return;
+    }
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const room = await response.json();
     try {
@@ -82,7 +180,7 @@ async function createRoom() {
   } catch (error) {
     console.error("Room creation failed:", error);
     createStatus.textContent = "Не удалось создать доску";
-    for (const button of createButtons) button.disabled = false;
+    createButtons.forEach((button) => { button.disabled = !teacherAuthenticated; });
   }
 }
 
@@ -175,4 +273,14 @@ function showJoinError(message) {
 function hideJoinError() {
   joinError.classList.add("hidden");
   joinError.textContent = "";
+}
+
+function showTeacherError(message) {
+  teacherLoginError.textContent = message;
+  teacherLoginError.classList.remove("hidden");
+}
+
+function hideTeacherError() {
+  teacherLoginError.classList.add("hidden");
+  teacherLoginError.textContent = "";
 }
