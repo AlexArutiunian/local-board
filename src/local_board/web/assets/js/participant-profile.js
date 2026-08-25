@@ -4,24 +4,11 @@ const ROLES = new Set(["teacher", "student"]);
 
 export async function resolveParticipantProfile() {
   bindPenUiControls(document);
-  const params = new URLSearchParams(location.search);
-  const roleHint = ROLES.has(params.get("role")) ? params.get("role") : null;
-  const nameHint = cleanName(params.get("name"));
-  const storedRole = loadString("local-board:participant-role");
-  const initialRole = roleHint || (ROLES.has(storedRole) ? storedRole : null);
-
-  if (roleHint && nameHint) {
-    saveProfile(roleHint, nameHint);
-    stripNameFromUrl();
-    return buildProfile(roleHint, nameHint);
-  }
-
-  if (initialRole) {
-    const storedName = cleanName(loadString(nameKey(initialRole)));
-    if (storedName) return buildProfile(initialRole, storedName);
-  }
-
-  return showProfileDialog({ role: initialRole || "student", lockRole: Boolean(roleHint) });
+  const serverRole = await loadSessionRole();
+  const role = ROLES.has(serverRole) ? serverRole : "student";
+  const storedName = cleanName(loadString(nameKey(role)));
+  if (storedName) return buildProfile(role, storedName);
+  return showProfileDialog({ role, lockRole: true });
 }
 
 export async function editParticipantProfile(currentProfile) {
@@ -52,23 +39,33 @@ export function deviceLabel() {
   return "Компьютер";
 }
 
-export function shareUrlForRole(boardId, role, teacherName = "") {
-  const url = new URL(`/b/${encodeURIComponent(boardId)}`, location.origin);
-  url.searchParams.set("role", role === "teacher" ? "teacher" : "student");
-  if (role === "teacher" && cleanName(teacherName)) url.searchParams.set("name", cleanName(teacherName));
-  return url.toString();
+async function loadSessionRole() {
+  const boardId = resolveBoardId();
+  try {
+    const response = await fetch(`/api/boards/${encodeURIComponent(boardId)}/session`, { cache: "no-store" });
+    if (response.status === 401 || response.status === 403) {
+      location.assign(`/?room=${encodeURIComponent(boardId)}`);
+      return null;
+    }
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = await response.json();
+    return payload.role;
+  } catch (error) {
+    console.warn("Failed to resolve room session role:", error);
+    return null;
+  }
 }
 
 function buildProfile(role, name) {
   saveProfile(role, name);
   document.documentElement.dataset.participantRole = role;
   document.getElementById("copyTeacherLink")?.classList.toggle("hidden", role !== "teacher");
+  document.getElementById("rotatePasscode")?.classList.toggle("hidden", role !== "teacher");
   return { role, name, device: deviceLabel() };
 }
 
 function saveProfile(role, name) {
   try {
-    localStorage.setItem("local-board:participant-role", role);
     localStorage.setItem(nameKey(role), cleanName(name));
   } catch (_) {}
 }
@@ -76,13 +73,6 @@ function saveProfile(role, name) {
 function nameKey(role) { return `local-board:participant-name:${role}`; }
 function loadString(key) { try { return localStorage.getItem(key) || ""; } catch (_) { return ""; } }
 function cleanName(value) { return String(value || "").trim().slice(0, 48); }
-
-function stripNameFromUrl() {
-  const url = new URL(location.href);
-  if (!url.searchParams.has("name")) return;
-  url.searchParams.delete("name");
-  window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
-}
 
 function showProfileDialog({ role, name = "", lockRole = false, title = "Кто вы в этой доске?" }) {
   return new Promise((resolve) => {
@@ -92,7 +82,7 @@ function showProfileDialog({ role, name = "", lockRole = false, title = "Кто 
       <form class="profile-dialog" aria-label="Профиль участника">
         <div class="profile-dialog-kicker">Local Board</div>
         <h2>${escapeHtml(title)}</h2>
-        <p>Имя и роль видят остальные участники комнаты.</p>
+        <p>Имя видят остальные участники. Роль выдана защищённой сессией комнаты.</p>
         <div class="profile-role-switch" role="group" aria-label="Роль">
           <button type="button" data-role="teacher">Преподаватель</button>
           <button type="button" data-role="student">Ученик</button>
@@ -145,6 +135,11 @@ function showProfileDialog({ role, name = "", lockRole = false, title = "Кто 
       });
     }
   });
+}
+
+function resolveBoardId() {
+  const match = location.pathname.match(/^\/b\/([A-Za-z0-9][A-Za-z0-9_-]{0,63})\/?$/);
+  return match ? match[1] : "";
 }
 
 function escapeHtml(value) {
