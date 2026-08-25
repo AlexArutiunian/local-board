@@ -7,10 +7,11 @@ import { LocalHistoryController } from "./history-controller.js";
 import { InputController } from "./input-controller.js";
 import { createInputDiagnostics } from "./input-diagnostics.js";
 import { bindPenUiControls } from "./pen-ui-controls.js";
-import { editParticipantProfile, resolveParticipantProfile, roleLabel, shareUrlForRole } from "./participant-profile.js";
+import { editParticipantProfile, resolveParticipantProfile, roleLabel } from "./participant-profile.js";
 import { RealtimeClient } from "./realtime-client.js";
 import { RemoteFollowController } from "./remote-follow.js";
 import { SelectionController } from "./selection-controller.js";
+import { SecureShareController } from "./share-controller.js";
 import { createId } from "./id.js";
 
 const boardId = resolveBoardId();
@@ -24,6 +25,11 @@ installBoardBackground(renderer, state);
 const remoteFollow = new RemoteFollowController({ renderer, localClientId: clientId });
 const inputDebug = createInputDiagnostics();
 const history = new LocalHistoryController({ state, onChange: updateUndoButtons });
+const shareController = new SecureShareController({
+  boardId,
+  participantRole: participantProfile.role,
+  showToast,
+});
 let toastTimer = null;
 let realtime;
 let latestRoster = [];
@@ -131,7 +137,7 @@ function bindToolbar() {
   bindBackgroundPicker();
   bindMorePopover();
   bindPresencePopover();
-  bindSharePopover();
+  shareController.bind();
 
   const widthInput = document.getElementById("width");
   const widthLabel = document.getElementById("widthLabel");
@@ -164,6 +170,10 @@ function bindToolbar() {
   document.getElementById("exportPng").addEventListener("click", () => {
     closePopover("morePopover", "moreTrigger");
     renderer.exportPng();
+  });
+  document.getElementById("exportPdf")?.addEventListener("click", () => {
+    closePopover("morePopover", "moreTrigger");
+    location.assign(`/api/boards/${encodeURIComponent(boardId)}/export.pdf`);
   });
   document.getElementById("clearBoard").addEventListener("click", () => {
     closePopover("morePopover", "moreTrigger");
@@ -331,29 +341,6 @@ function bindPresencePopover() {
   bindOutsideClose(trigger, popover, () => closeTopPopover("presencePopover", "presenceTrigger"));
 }
 
-function bindSharePopover() {
-  const trigger = document.getElementById("shareRoom");
-  const popover = document.getElementById("sharePopover");
-  trigger.addEventListener("click", (event) => {
-    event.stopPropagation();
-    const opening = popover.classList.contains("hidden");
-    closeTopPopovers("sharePopover");
-    popover.classList.toggle("hidden", !opening);
-    trigger.setAttribute("aria-expanded", String(opening));
-  });
-  document.getElementById("copyStudentLink").addEventListener("click", async () => {
-    const copied = await copyText(shareUrlForRole(boardId, "student"));
-    showToast(copied ? "Ссылка ученику скопирована" : "Не удалось скопировать", copied ? "success" : "error");
-    closeTopPopover("sharePopover", "shareRoom");
-  });
-  document.getElementById("copyTeacherLink").addEventListener("click", async () => {
-    const copied = await copyText(shareUrlForRole(boardId, "teacher", participantProfile.name));
-    showToast(copied ? "Ссылка преподавателя скопирована" : "Не удалось скопировать", copied ? "success" : "error");
-    closeTopPopover("sharePopover", "shareRoom");
-  });
-  bindOutsideClose(trigger, popover, () => closeTopPopover("sharePopover", "shareRoom"));
-}
-
 function bindOutsideClose(trigger, popover, close) {
   document.addEventListener("pointerdown", (event) => {
     if (popover.classList.contains("hidden")) return;
@@ -421,26 +408,6 @@ function clearBoard() {
   renderer.requestRender();
   updateUndoButtons();
   updateGoToLastButton();
-}
-
-async function copyText(text) {
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-  } catch (_) {}
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.setAttribute("readonly", "");
-  textarea.style.position = "fixed";
-  textarea.style.opacity = "0";
-  document.body.appendChild(textarea);
-  textarea.select();
-  let copied = false;
-  try { copied = document.execCommand("copy"); } catch (_) { copied = false; }
-  textarea.remove();
-  return copied;
 }
 
 function showToast(message, tone = "") {
