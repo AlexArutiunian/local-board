@@ -5,6 +5,7 @@ const createButtons = [
 const createStatus = document.getElementById("createStatus");
 const joinForm = document.getElementById("joinForm");
 const roomInput = document.getElementById("roomInput");
+const passcodeInput = document.getElementById("passcodeInput");
 const joinError = document.getElementById("joinError");
 const boardsGrid = document.getElementById("boardsGrid");
 const emptyBoards = document.getElementById("emptyBoards");
@@ -15,7 +16,12 @@ roomInput.addEventListener("input", () => {
   roomInput.value = roomInput.value.replace(/\D/g, "").slice(0, 4);
   hideJoinError();
 });
+passcodeInput.addEventListener("input", () => {
+  passcodeInput.value = passcodeInput.value.replace(/\D/g, "").slice(0, 6);
+  hideJoinError();
+});
 
+prefillJoin();
 loadRooms();
 
 async function loadRooms() {
@@ -41,7 +47,7 @@ function renderRooms(rooms) {
   for (const room of rooms) {
     const card = document.createElement("a");
     card.className = "board-card";
-    card.href = `${room.path}?role=teacher`;
+    card.href = room.path;
 
     const contentCount = Number(room.stroke_count || 0) + Number(room.object_count || 0);
     const contentLabel = contentCount === 1 ? "1 объект" : `${contentCount} объектов`;
@@ -64,12 +70,15 @@ function renderRooms(rooms) {
 
 async function createRoom() {
   for (const button of createButtons) button.disabled = true;
-  createStatus.textContent = "Создаю доску…";
+  createStatus.textContent = "Создаю защищённую доску…";
   try {
     const response = await fetch("/api/rooms", { method: "POST" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const room = await response.json();
-    location.assign(`${room.path}?role=teacher`);
+    try {
+      localStorage.setItem(`local-board:room-passcode:${room.room_id}`, room.passcode || "");
+    } catch (_) {}
+    location.assign(room.path);
   } catch (error) {
     console.error("Room creation failed:", error);
     createStatus.textContent = "Не удалось создать доску";
@@ -80,8 +89,13 @@ async function createRoom() {
 async function openRoom(event) {
   event.preventDefault();
   const roomId = roomInput.value.trim();
+  const passcode = passcodeInput.value.trim();
   if (!/^\d{4}$/.test(roomId)) {
     showJoinError("Код комнаты — ровно 4 цифры.");
+    return;
+  }
+  if (!/^\d{6}$/.test(passcode)) {
+    showJoinError("Пароль комнаты — 6 цифр.");
     return;
   }
 
@@ -89,19 +103,40 @@ async function openRoom(event) {
   const submit = joinForm.querySelector('button[type="submit"]');
   submit.disabled = true;
   try {
-    const response = await fetch(`/api/boards/${roomId}`, { cache: "no-store" });
+    const response = await fetch(`/api/boards/${roomId}/auth/passcode`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ passcode }),
+    });
     if (response.status === 404) {
-      showJoinError("Такой доски нет.");
+      showJoinError("Такой комнаты нет.");
+      return;
+    }
+    if (response.status === 401) {
+      showJoinError("Неверный код комнаты или пароль.");
+      return;
+    }
+    if (response.status === 429) {
+      showJoinError("Слишком много попыток. Подожди несколько минут.");
       return;
     }
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    location.assign(`/b/${roomId}?role=teacher`);
+    const payload = await response.json();
+    location.assign(payload.path || `/b/${roomId}`);
   } catch (error) {
-    console.error("Room lookup failed:", error);
-    showJoinError("Не удалось проверить комнату.");
+    console.error("Room login failed:", error);
+    showJoinError("Не удалось войти в комнату.");
   } finally {
     submit.disabled = false;
   }
+}
+
+function prefillJoin() {
+  const params = new URLSearchParams(location.search);
+  const room = params.get("room") || "";
+  if (/^\d{4}$/.test(room)) roomInput.value = room;
+  if (params.get("auth") === "invalid") showJoinError("Ссылка-приглашение недействительна или устарела.");
+  if (roomInput.value) requestAnimationFrame(() => passcodeInput.focus());
 }
 
 function formatUpdatedAt(value) {
