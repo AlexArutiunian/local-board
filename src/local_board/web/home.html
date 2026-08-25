@@ -24,30 +24,42 @@
     <main class="dashboard">
       <section class="dashboard-heading">
         <div>
+          <p class="eyebrow">Studybruh</p>
           <h1>Доски</h1>
+          <p class="lead">Комната защищена отдельным шестизначным паролем. Ссылка или QR-приглашение может открыть её без ручного ввода пароля.</p>
         </div>
 
         <form id="joinForm" class="join-inline">
-          <label for="roomInput">Войти по коду</label>
-          <div class="join-row">
+          <label for="roomInput">Войти в комнату</label>
+          <div class="join-row secure-join-row">
             <input
               id="roomInput"
               inputmode="numeric"
               pattern="[0-9]{4}"
               maxlength="4"
               autocomplete="off"
-              placeholder="0000"
+              placeholder="Код 0000"
               aria-label="Четырёхзначный код комнаты"
             />
-            <button type="submit">Открыть</button>
+            <input
+              id="passcodeInput"
+              inputmode="numeric"
+              pattern="[0-9]{6}"
+              maxlength="6"
+              autocomplete="one-time-code"
+              placeholder="Пароль 000000"
+              aria-label="Шестизначный пароль комнаты"
+            />
+            <button type="submit">Войти</button>
           </div>
+          <p class="join-help">Или открой ссылку/QR, которую прислал преподаватель.</p>
           <p id="joinError" class="error hidden" aria-live="polite"></p>
         </form>
       </section>
 
       <section class="boards-section" aria-labelledby="boardsTitle">
         <div class="section-title-row">
-          <h2 id="boardsTitle">Последние доски</h2>
+          <h2 id="boardsTitle">Мои преподавательские доски</h2>
           <span id="createStatus" class="status" aria-live="polite"></span>
         </div>
 
@@ -58,8 +70,8 @@
 
         <div id="emptyBoards" class="empty-state hidden">
           <div class="empty-icon" aria-hidden="true">□</div>
-          <h3>Пока нет досок</h3>
-          <p>Создай первую — она появится здесь и останется доступной после перезапуска сервера.</p>
+          <h3>Пока нет доступных досок</h3>
+          <p>Создай новую защищённую доску. На этом устройстве сохранится преподавательская сессия.</p>
           <button id="createRoomEmpty" class="primary" type="button">Создать доску</button>
         </div>
       </section>
