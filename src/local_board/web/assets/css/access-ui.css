@@ -1,0 +1,111 @@
+.teacher-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.teacher-state {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid #e5e5e5;
+  border-radius: 999px;
+  color: #737373;
+  background: rgba(255,255,255,.72);
+  font-size: 11px;
+  font-weight: 720;
+}
+.teacher-state.active {
+  border-color: #bbf7d0;
+  color: #166534;
+  background: #f0fdf4;
+}
+
+.entry-stack {
+  display: grid;
+  gap: 10px;
+}
+.teacher-login-card {
+  transition: border-color .15s ease, background .15s ease;
+}
+.teacher-login-card.authenticated {
+  border-color: #d1fae5;
+  background: rgba(240,253,244,.76);
+}
+.teacher-login-row { grid-template-columns: 1fr auto; }
+
+.room-security-box {
+  display: grid;
+  gap: 8px;
+  padding: 10px 11px;
+  border: 1px solid #e5e5e5;
+  border-radius: 12px;
+  background: #fafafa;
+}
+.room-security-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.room-security-head span,
+.share-qr-panel span {
+  color: #737373;
+  font-size: 11px;
+}
+.room-passcode-value {
+  font-size: 20px;
+  font-weight: 780;
+  letter-spacing: .13em;
+  font-variant-numeric: tabular-nums;
+}
+.room-passcode-value.muted {
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0;
+  color: #737373;
+}
+.rotate-passcode {
+  min-height: 32px !important;
+  padding: 0 9px !important;
+  font-size: 11px !important;
+}
+
+.share-qr-panel {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  grid-template-rows: auto auto 1fr;
+  gap: 3px 11px;
+  align-items: start;
+  padding: 10px;
+  border: 1px solid #e5e5e5;
+  border-radius: 12px;
+  background: #fff;
+}
+.share-qr-panel img {
+  grid-row: 1 / 4;
+  width: 92px;
+  height: 92px;
+  border-radius: 8px;
+  image-rendering: pixelated;
+}
+.share-qr-panel strong {
+  margin-top: 2px;
+  font-size: 12px;
+}
+.share-qr-url {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #525252 !important;
+  user-select: text;
+}
+
+@media (max-width: 760px) {
+  .teacher-header-actions { gap: 5px; }
+  .teacher-state { display: none; }
+  .share-qr-panel { grid-template-columns: 82px minmax(0, 1fr); }
+  .share-qr-panel img { width: 82px; height: 82px; }
+}
