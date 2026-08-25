@@ -9,6 +9,7 @@
   <title>Local Board</title>
   <link rel="stylesheet" href="/assets/css/app.css" />
   <link rel="stylesheet" href="/assets/css/profile-dialog.css" />
+  <link rel="stylesheet" href="/assets/css/access-ui.css" />
 </head>
 <body>
   <div id="app">
@@ -21,7 +22,7 @@
           <div><strong>Local Board</strong><span id="boardName" class="board-name">room</span></div>
         </a>
         <div class="topbar-card topbar-actions">
-          <button id="profileButton" class="participant-self" type="button" title="Изменить имя или роль">
+          <button id="profileButton" class="participant-self" type="button" title="Изменить имя">
             <span id="selfRole" class="role-badge student">Ученик</span>
             <span id="selfName" class="self-name">Участник</span>
           </button>
@@ -133,14 +134,29 @@
 
       <div id="morePopover" class="board-popover action-popover hidden" role="menu" aria-label="Дополнительные действия">
         <button id="exportPng" class="popover-action" role="menuitem">Сохранить текущий вид как PNG</button>
+        <button id="exportPdf" class="popover-action" role="menuitem">Скачать всю доску как PDF</button>
         <button id="clearBoard" class="popover-action danger" role="menuitem">Очистить всю доску</button>
       </div>
 
       <div id="presencePopover" class="top-popover presence-popover hidden" role="dialog" aria-label="Участники комнаты"></div>
       <div id="sharePopover" class="top-popover share-popover hidden" role="dialog" aria-label="Пригласить в комнату">
-        <div class="popover-title">Пригласить</div>
-        <button id="copyStudentLink" class="share-link-option" type="button"><strong>Ссылка ученику</strong><span>Откроется как «Ученик»</span></button>
-        <button id="copyTeacherLink" class="share-link-option" type="button"><strong>Ссылка преподавателя</strong><span>Для твоего второго устройства</span></button>
+        <div class="popover-title">Доступ к комнате</div>
+        <div class="room-security-box">
+          <div class="room-security-head">
+            <span>Пароль комнаты</span>
+            <button id="rotatePasscode" class="rotate-passcode" type="button">Сменить</button>
+          </div>
+          <strong id="roomPasscode" class="room-passcode-value muted">Не сохранён на этом устройстве</strong>
+        </div>
+        <button id="copyStudentLink" class="share-link-option" type="button"><strong>Создать ссылку + QR ученику</strong><span>Роль ученика · действует 7 дней</span></button>
+        <button id="copyTeacherLink" class="share-link-option" type="button"><strong>Ссылка на второе устройство</strong><span>Роль преподавателя · действует 15 минут</span></button>
+        <div id="shareQrPanel" class="share-qr-panel hidden">
+          <img id="shareQrImage" alt="QR приглашения" />
+          <strong id="shareQrTitle">Приглашение</strong>
+          <span id="shareQrExpires"></span>
+          <span id="shareQrUrl" class="share-qr-url"></span>
+          <button id="copyQrLink" type="button">Скопировать ссылку</button>
+        </div>
       </div>
 
       <div id="boardToast" class="board-toast hidden" role="status" aria-live="polite"></div>
@@ -149,6 +165,5 @@
   </div>
 
   <script type="module" src="/assets/js/app.js"></script>
-  <script type="module" src="/assets/js/pdf-export.js"></script>
 </body>
 </html>
