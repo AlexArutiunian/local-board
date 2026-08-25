@@ -30,6 +30,7 @@ class Settings:
     environment: str = os.environ.get("LOCAL_BOARD_ENV", "development").strip().lower()
     secret_key: str = os.environ.get("LOCAL_BOARD_SECRET_KEY", DEV_SECRET)
     allowed_hosts: tuple[str, ...] = _allowed_hosts()
+    public_base_url: str = os.environ.get("PUBLIC_BASE_URL", "").strip().rstrip("/")
 
     @property
     def production(self) -> bool:
