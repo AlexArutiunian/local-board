@@ -4,13 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "local-board"
-version = "0.6.0"
-description = "Realtime collaborative whiteboard with participant roles, Apple Pencil input, AI formula OCR, image objects and shared paper backgrounds"
+version = "0.7.0"
+description = "Realtime collaborative whiteboard with secure rooms, Apple Pencil input, PDF export and production data mirrors"
 requires-python = ">=3.10"
 dependencies = [
   "fastapi>=0.116,<1",
   "httpx>=0.28,<1",
+  "huggingface-hub>=1.22,<2",
+  "libsql>=0.1.11,<0.2",
   "pillow>=11,<13",
+  "qrcode>=8.2,<9",
   "reportlab>=4.4,<5",
   "uvicorn[standard]>=0.35,<1",
 ]
