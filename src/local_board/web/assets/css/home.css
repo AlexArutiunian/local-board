@@ -37,7 +37,7 @@ a { color: inherit; }
 }
 .dashboard-heading {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 480px);
   gap: 54px;
   align-items: end;
   padding-bottom: 38px;
@@ -73,6 +73,8 @@ button.compact { min-height: 38px; display: inline-flex; align-items: center; ga
 }
 .join-inline label { display: block; margin-bottom: 9px; color: #737373; font-size: 12px; font-weight: 680; }
 .join-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+.secure-join-row { grid-template-columns: minmax(90px,.75fr) minmax(130px,1fr) auto; }
+.join-help { margin: 9px 0 0; color: #8a8a8a; font-size: 11px; line-height: 1.4; }
 input {
   width: 100%;
   min-width: 0;
@@ -140,5 +142,7 @@ a.board-card:hover { transform: translateY(-2px); border-color: #c7c7c7; box-sha
   .home-topbar { padding-left: 14px; padding-right: 14px; }
   .dashboard { width: min(100% - 24px, 1180px); padding-top: 30px; }
   .dashboard-heading { grid-template-columns: 1fr; gap: 24px; }
+  .secure-join-row { grid-template-columns: 1fr 1fr; }
+  .secure-join-row button { grid-column: 1 / -1; }
   .boards-grid { grid-template-columns: 1fr; }
 }
