@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import os
 import uuid
 from pathlib import Path
@@ -38,16 +39,20 @@ from .storage import ASSET_EXTENSIONS, JsonBoardStore, validate_board_id
 MAX_IMAGE_BYTES = 12 * 1024 * 1024
 MAX_AI_REQUEST_BYTES = 6_200_000
 SESSION_COOKIE_PREFIX = "lb_session_"
+ADMIN_COOKIE_NAME = "lb_admin"
+ADMIN_SESSION_ID = "__local_board_admin__"
 
 
-def create_app(data_dir: Path | None = None) -> FastAPI:
+def create_app(data_dir: Path | None = None, *, require_admin: bool | None = None) -> FastAPI:
     if data_dir is None:
         SETTINGS.validate()
+    admin_required = (data_dir is None) if require_admin is None else bool(require_admin)
     external = None if data_dir is not None else ExternalMirror.from_env()
     store = JsonBoardStore(data_dir or SETTINGS.data_dir, external_mirror=external)
     access = RoomAccessStore(data_dir or SETTINGS.data_dir)
     signer = SessionSigner(SETTINGS.secret_key)
-    limiter = LoginLimiter()
+    room_limiter = LoginLimiter()
+    admin_limiter = LoginLimiter(max_attempts=6, window_seconds=60, block_seconds=300)
     rooms = RoomManager(store)
     room_service = RoomService(store)
 
@@ -61,6 +66,7 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
     app.state.rooms = rooms
     app.state.room_service = room_service
     app.state.external = external
+    app.state.admin_required = admin_required
 
     app.mount("/assets", StaticFiles(directory=WEB_DIR / "assets"), name="assets")
 
@@ -95,10 +101,51 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
     async def home() -> FileResponse:
         return FileResponse(WEB_DIR / "home.html")
 
+    @app.get("/api/admin/session")
+    async def admin_session(request: Request) -> dict[str, bool]:
+        return {
+            "required": admin_required,
+            "authenticated": (not admin_required) or _is_admin(request, signer),
+        }
+
+    @app.post("/api/admin/login")
+    async def admin_login(request: Request) -> Response:
+        if not admin_required:
+            return JSONResponse({"ok": True})
+        key = f"admin:{_client_ip(request)}"
+        retry_after = admin_limiter.check(key)
+        if retry_after:
+            raise HTTPException(
+                status_code=429,
+                detail="too many attempts",
+                headers={"Retry-After": str(retry_after)},
+            )
+        try:
+            payload = await request.json()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="invalid JSON") from exc
+        password = str(payload.get("password") if isinstance(payload, dict) else "")
+        if not hmac.compare_digest(password.encode("utf-8"), SETTINGS.admin_password.encode("utf-8")):
+            admin_limiter.fail(key)
+            raise HTTPException(status_code=401, detail="invalid teacher password")
+        admin_limiter.success(key)
+        response = JSONResponse({"ok": True})
+        _set_admin_cookie(response, signer)
+        return response
+
+    @app.post("/api/admin/logout")
+    async def admin_logout() -> Response:
+        response = JSONResponse({"ok": True})
+        response.delete_cookie(ADMIN_COOKIE_NAME, path="/")
+        return response
+
     @app.get("/api/rooms")
     async def list_rooms(request: Request) -> dict[str, list[dict]]:
+        boards = store.list_boards()
+        if not admin_required or _is_admin(request, signer):
+            return {"rooms": boards}
         visible = []
-        for room in store.list_boards():
+        for room in boards:
             board_id = str(room.get("room_id") or "")
             claims = signer.verify(request.cookies.get(_session_cookie_name(board_id)), board_id)
             if claims and claims.get("role") == "teacher":
@@ -106,7 +153,9 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         return {"rooms": visible}
 
     @app.post("/api/rooms", status_code=201)
-    async def create_room() -> Response:
+    async def create_room(request: Request) -> Response:
+        if admin_required and not _is_admin(request, signer):
+            raise HTTPException(status_code=401, detail="teacher login required")
         room_id = room_service.create_room()
         passcode = generate_passcode()
         access.create(room_id, passcode)
@@ -138,8 +187,8 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         _require_existing_board(store, board_id)
         if not access.exists(board_id):
             raise HTTPException(status_code=403, detail="room access is not initialized")
-        key = f"{board_id}:{_client_ip(request)}"
-        retry_after = limiter.check(key)
+        key = f"room:{board_id}:{_client_ip(request)}"
+        retry_after = room_limiter.check(key)
         if retry_after:
             raise HTTPException(
                 status_code=429,
@@ -152,11 +201,13 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail="invalid JSON") from exc
         passcode = str(payload.get("passcode") if isinstance(payload, dict) else "").strip()
         if not access.verify_passcode(board_id, passcode):
-            limiter.fail(key)
+            room_limiter.fail(key)
             raise HTTPException(status_code=401, detail="invalid room code or passcode")
-        limiter.success(key)
-        response = JSONResponse({"ok": True, "path": f"/b/{board_id}", "role": "student"})
-        _set_session_cookie(response, signer, board_id, "student")
+        room_limiter.success(key)
+        existing = _session_claims(request, signer, board_id)
+        role = "teacher" if existing and existing.get("role") == "teacher" else "student"
+        response = JSONResponse({"ok": True, "path": f"/b/{board_id}", "role": role})
+        _set_session_cookie(response, signer, board_id, role)
         return response
 
     @app.get("/api/boards/{board_id}/session")
@@ -176,7 +227,8 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         role = str(payload.get("role") if isinstance(payload, dict) else "student")
         if role not in {"teacher", "student"}:
             raise HTTPException(status_code=400, detail="invalid invite role")
-        ttl = int(payload.get("ttl_seconds", DEFAULT_INVITE_TTL_SECONDS)) if isinstance(payload, dict) else DEFAULT_INVITE_TTL_SECONDS
+        default_ttl = 15 * 60 if role == "teacher" else DEFAULT_INVITE_TTL_SECONDS
+        ttl = int(payload.get("ttl_seconds", default_ttl)) if isinstance(payload, dict) else default_ttl
         ttl = max(300, min(ttl, 30 * 24 * 60 * 60))
         token, expires_at_ms = access.create_invite(board_id, role, ttl_seconds=ttl)
         base = _public_base_url(request)
@@ -359,6 +411,23 @@ def _set_session_cookie(response: Response, signer: SessionSigner, board_id: str
         samesite="lax",
         path="/",
     )
+
+
+def _set_admin_cookie(response: Response, signer: SessionSigner) -> None:
+    response.set_cookie(
+        key=ADMIN_COOKIE_NAME,
+        value=signer.issue(ADMIN_SESSION_ID, "teacher", ttl_seconds=SESSION_TTL_SECONDS),
+        max_age=SESSION_TTL_SECONDS,
+        httponly=True,
+        secure=SETTINGS.production,
+        samesite="strict",
+        path="/",
+    )
+
+
+def _is_admin(request: Request, signer: SessionSigner) -> bool:
+    claims = signer.verify(request.cookies.get(ADMIN_COOKIE_NAME), ADMIN_SESSION_ID)
+    return bool(claims and claims.get("role") == "teacher")
 
 
 def _session_claims(request: Request, signer: SessionSigner, board_id: str):
