@@ -29,9 +29,9 @@ def empty_board_document(board_id: str) -> dict[str, Any]:
 
 
 class JsonBoardStore:
-    """Atomic JSON persistence, append-only activity logs and local assets."""
+    """Atomic local persistence with optional best-effort production mirrors."""
 
-    def __init__(self, data_dir: Path):
+    def __init__(self, data_dir: Path, external_mirror: Any = None):
         self.data_dir = data_dir
         self.boards_dir = data_dir / "boards"
         self.assets_dir = data_dir / "assets"
@@ -39,6 +39,7 @@ class JsonBoardStore:
         self.boards_dir.mkdir(parents=True, exist_ok=True)
         self.assets_dir.mkdir(parents=True, exist_ok=True)
         self.activity_dir.mkdir(parents=True, exist_ok=True)
+        self.external_mirror = external_mirror
         self._write_lock = Lock()
 
     def _path(self, board_id: str) -> Path:
@@ -49,13 +50,16 @@ class JsonBoardStore:
 
     def create(self, board_id: str) -> bool:
         path = self._path(board_id)
-        encoded = json.dumps(empty_board_document(board_id), ensure_ascii=False, separators=(",", ":"))
+        document = empty_board_document(board_id)
+        encoded = json.dumps(document, ensure_ascii=False, separators=(",", ":"))
         with self._write_lock:
             try:
                 with path.open("x", encoding="utf-8") as file:
                     file.write(encoded)
             except FileExistsError:
                 return False
+        if self.external_mirror is not None:
+            self.external_mirror.mirror_snapshot(board_id, document)
         return True
 
     def list_boards(self) -> list[dict[str, Any]]:
@@ -105,13 +109,11 @@ class JsonBoardStore:
         with self._write_lock:
             tmp.write_text(encoded, encoding="utf-8")
             tmp.replace(path)
+        if self.external_mirror is not None:
+            self.external_mirror.mirror_snapshot(board_id, document)
 
     def append_activity(self, board_id: str, record: dict[str, Any]) -> Path:
-        """Append one compact JSON line without retaining historical activity in RAM.
-
-        Logs are sharded by UTC day so a long-running classroom server never grows
-        one giant file. Each call opens, appends and closes the current day's file.
-        """
+        """Append one compact semantic JSON line and mirror it to configured services."""
         validate_board_id(board_id)
         timestamp_ms = int(record.get("t", 0))
         if timestamp_ms <= 0:
@@ -125,6 +127,8 @@ class JsonBoardStore:
             with path.open("a", encoding="utf-8") as file:
                 file.write(encoded)
                 file.write("\n")
+        if self.external_mirror is not None:
+            self.external_mirror.mirror_activity(board_id, record, path)
         return path
 
     def save_asset(self, board_id: str, content_type: str, data: bytes) -> str:
@@ -138,6 +142,8 @@ class JsonBoardStore:
         path = room_dir / name
         with self._write_lock:
             path.write_bytes(data)
+        if self.external_mirror is not None:
+            self.external_mirror.mirror_asset(board_id, name, data)
         return name
 
     def asset_path(self, board_id: str, asset_name: str) -> Path:
@@ -145,3 +151,8 @@ class JsonBoardStore:
         if not ASSET_NAME_RE.fullmatch(asset_name):
             raise ValueError("invalid asset name")
         return self.assets_dir / board_id / asset_name
+
+    def archive_pdf(self, board_id: str, pdf_bytes: bytes) -> None:
+        validate_board_id(board_id)
+        if self.external_mirror is not None:
+            self.external_mirror.mirror_pdf(board_id, pdf_bytes)
