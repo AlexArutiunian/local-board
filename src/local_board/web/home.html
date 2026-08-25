@@ -15,10 +15,14 @@
         <strong>Local Board</strong>
       </a>
 
-      <button id="createRoom" class="primary compact" type="button">
-        <span aria-hidden="true">＋</span>
-        Новая доска
-      </button>
+      <div class="teacher-header-actions">
+        <span id="teacherState" class="teacher-state">Гость</span>
+        <button id="teacherLogout" class="compact hidden" type="button">Выйти</button>
+        <button id="createRoom" class="primary compact" type="button" disabled>
+          <span aria-hidden="true">＋</span>
+          Новая доска
+        </button>
+      </div>
     </header>
 
     <main class="dashboard">
@@ -29,37 +33,55 @@
           <p class="lead">Комната защищена отдельным шестизначным паролем. Ссылка или QR-приглашение может открыть её без ручного ввода пароля.</p>
         </div>
 
-        <form id="joinForm" class="join-inline">
-          <label for="roomInput">Войти в комнату</label>
-          <div class="join-row secure-join-row">
-            <input
-              id="roomInput"
-              inputmode="numeric"
-              pattern="[0-9]{4}"
-              maxlength="4"
-              autocomplete="off"
-              placeholder="Код 0000"
-              aria-label="Четырёхзначный код комнаты"
-            />
-            <input
-              id="passcodeInput"
-              inputmode="numeric"
-              pattern="[0-9]{6}"
-              maxlength="6"
-              autocomplete="one-time-code"
-              placeholder="Пароль 000000"
-              aria-label="Шестизначный пароль комнаты"
-            />
-            <button type="submit">Войти</button>
-          </div>
-          <p class="join-help">Или открой ссылку/QR, которую прислал преподаватель.</p>
-          <p id="joinError" class="error hidden" aria-live="polite"></p>
-        </form>
+        <div class="entry-stack">
+          <form id="teacherLoginForm" class="join-inline teacher-login-card">
+            <label for="teacherPassword">Режим преподавателя</label>
+            <div class="join-row teacher-login-row">
+              <input
+                id="teacherPassword"
+                type="password"
+                autocomplete="current-password"
+                placeholder="Пароль преподавателя"
+                aria-label="Пароль преподавателя"
+              />
+              <button type="submit">Открыть</button>
+            </div>
+            <p id="teacherLoginHint" class="join-help">Нужен только для создания и управления досками.</p>
+            <p id="teacherLoginError" class="error hidden" aria-live="polite"></p>
+          </form>
+
+          <form id="joinForm" class="join-inline">
+            <label for="roomInput">Войти в комнату</label>
+            <div class="join-row secure-join-row">
+              <input
+                id="roomInput"
+                inputmode="numeric"
+                pattern="[0-9]{4}"
+                maxlength="4"
+                autocomplete="off"
+                placeholder="Код 0000"
+                aria-label="Четырёхзначный код комнаты"
+              />
+              <input
+                id="passcodeInput"
+                inputmode="numeric"
+                pattern="[0-9]{6}"
+                maxlength="6"
+                autocomplete="one-time-code"
+                placeholder="Пароль 000000"
+                aria-label="Шестизначный пароль комнаты"
+              />
+              <button type="submit">Войти</button>
+            </div>
+            <p class="join-help">Или открой ссылку/QR, которую прислал преподаватель.</p>
+            <p id="joinError" class="error hidden" aria-live="polite"></p>
+          </form>
+        </div>
       </section>
 
       <section class="boards-section" aria-labelledby="boardsTitle">
         <div class="section-title-row">
-          <h2 id="boardsTitle">Мои преподавательские доски</h2>
+          <h2 id="boardsTitle">Преподавательские доски</h2>
           <span id="createStatus" class="status" aria-live="polite"></span>
         </div>
 
@@ -71,8 +93,8 @@
         <div id="emptyBoards" class="empty-state hidden">
           <div class="empty-icon" aria-hidden="true">□</div>
           <h3>Пока нет доступных досок</h3>
-          <p>Создай новую защищённую доску. На этом устройстве сохранится преподавательская сессия.</p>
-          <button id="createRoomEmpty" class="primary" type="button">Создать доску</button>
+          <p>Войди как преподаватель и создай защищённую доску. Сессия хранится только в HttpOnly cookie браузера.</p>
+          <button id="createRoomEmpty" class="primary" type="button" disabled>Создать доску</button>
         </div>
       </section>
     </main>
