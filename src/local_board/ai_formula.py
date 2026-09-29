@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
+DEFAULT_LOCAL_AI_BASE_URL = "http://127.0.0.1:8787/v1"
 
 # Ox Alpha is currently free on OpenRouter, accepts image input and has a single
 # highly-available provider. Keep formula OCR deterministic: one known model,
@@ -31,16 +32,12 @@ LEGACY_FORMULA_MODELS = {
 
 MAX_FORMULA_IMAGE_CHARS = 2_000_000
 MAX_LATEX_CHARS = 2048
-# A short formula needs very few visible tokens, but do not use an extremely
-# tiny cap on a reasoning model: some providers account hidden reasoning against
-# completion limits differently. Latency is controlled with minimal reasoning.
 MAX_OUTPUT_TOKENS = 256
 NO_FORMULA_TOKEN = "__NO_FORMULA__"
 
 # OpenRouter currently reports Ox Alpha around 6.8s P50 latency. A 9s client
 # timeout was therefore cutting off healthy slow-tail requests and surfacing
-# them as fake 503s. Keep a generous transport timeout; UI timing still exposes
-# the real latency so we can evaluate the model honestly.
+# them as fake 503s. The same budget is fine for the local compatibility API.
 REQUEST_TIMEOUT_SECONDS = 22.0
 TRANSIENT_HTTP_STATUSES = {408, 409, 425, 429, 500, 502, 503, 504}
 _IMAGE_DATA_URL_RE = re.compile(r"^data:image/(png|jpeg|webp);base64,[A-Za-z0-9+/=\r\n]+$")
@@ -74,10 +71,8 @@ def validate_free_formula_model(model: str) -> str:
     value = str(model or "").strip()
     if not value or value in LEGACY_FORMULA_MODELS:
         return DEFAULT_FORMULA_MODEL
-    # Ox Alpha is free even though its slug does not end in :free.
     if value == DEFAULT_FORMULA_MODEL:
         return value
-    # Keep custom overrides financially fail-closed.
     if value.endswith(":free"):
         return value
     raise FormulaRecognitionError(
@@ -87,6 +82,14 @@ def validate_free_formula_model(model: str) -> str:
 
 def formula_model_candidates(model: str) -> list[str]:
     return [validate_free_formula_model(model)]
+
+
+def _formula_prompt() -> str:
+    return (
+        "OCR the handwritten math in this crop. Return ONLY the exact MathJax LaTeX, "
+        "no explanation, no solving, no markdown, no $ delimiters. Preserve every "
+        "symbol exactly. If no formula is visible return __NO_FORMULA__."
+    )
 
 
 async def recognize_formula(
@@ -113,97 +116,147 @@ async def recognize_formula(
     return result
 
 
+async def recognize_formula_local(
+    image_data_url: str,
+    *,
+    base_url: str = DEFAULT_LOCAL_AI_BASE_URL,
+    model: str = "local",
+    api_key: str = "local",
+) -> dict[str, Any]:
+    """Recognize a formula through Local AI Shell's OpenAI-compatible /v1 API."""
+    image_data_url = validate_formula_image_data_url(image_data_url)
+    base_url = str(base_url or "").strip().rstrip("/")
+    model = str(model or "").strip() or "local"
+    if not base_url:
+        raise FormulaRecognitionError("LOCAL_AI_BASE_URL is empty")
+    chat_url = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
+
+    started = time.perf_counter()
+    try:
+        result = await _recognize_with_endpoint(
+            image_data_url,
+            api_key=api_key or "local",
+            model=model,
+            chat_url=chat_url,
+            provider_name="Local AI",
+            openrouter_options=False,
+        )
+    except Exception:
+        elapsed_ms = round((time.perf_counter() - started) * 1000)
+        logger.exception("Local formula OCR failed via %s after %dms", model, elapsed_ms)
+        raise
+    result["attempted_models"] = [model]
+    result["elapsed_ms"] = round((time.perf_counter() - started) * 1000)
+    result["provider"] = "local"
+    return result
+
+
 async def _recognize_with_model(
     image_data_url: str,
     *,
     api_key: str,
     model: str,
 ) -> dict[str, Any]:
-    prompt = (
-        "OCR the handwritten math in this crop. Return ONLY the exact MathJax LaTeX, "
-        "no explanation, no solving, no markdown, no $ delimiters. Preserve every "
-        "symbol exactly. If no formula is visible return __NO_FORMULA__."
+    return await _recognize_with_endpoint(
+        image_data_url,
+        api_key=api_key,
+        model=model,
+        chat_url=OPENROUTER_CHAT_URL,
+        provider_name="Ox Alpha",
+        openrouter_options=True,
     )
 
-    payload = {
+
+async def _recognize_with_endpoint(
+    image_data_url: str,
+    *,
+    api_key: str,
+    model: str,
+    chat_url: str,
+    provider_name: str,
+    openrouter_options: bool,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         "model": model,
         "messages": [
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": prompt},
+                    {"type": "text", "text": _formula_prompt()},
                     {"type": "image_url", "image_url": {"url": image_data_url}},
                 ],
             }
         ],
         "max_tokens": MAX_OUTPUT_TOKENS,
         "temperature": 0,
-        # OCR is transcription, not a reasoning task. Use the smallest supported
-        # reasoning effort. If a provider normalizes this value, OpenRouter still
-        # keeps the request valid; excluding reasoning keeps only useful text.
-        "reasoning": {"effort": "minimal", "exclude": True},
-        "provider": {
-            "sort": "latency",
-            "allow_fallbacks": True,
-        },
     }
+    if openrouter_options:
+        payload["reasoning"] = {"effort": "minimal", "exclude": True}
+        payload["provider"] = {"sort": "latency", "allow_fallbacks": True}
+
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://local-board.local",
-        "X-Title": "Local Board Formula OCR",
     }
+    if openrouter_options:
+        headers.update(
+            {
+                "HTTP-Referer": "https://local-board.local",
+                "X-Title": "Local Board Formula OCR",
+            }
+        )
 
     request_started = time.perf_counter()
     try:
         client = _get_http_client()
         response = await client.post(
-            OPENROUTER_CHAT_URL,
+            chat_url,
             headers=headers,
             json=payload,
             timeout=httpx.Timeout(REQUEST_TIMEOUT_SECONDS, connect=2.0),
         )
     except httpx.TimeoutException as exc:
         elapsed = round((time.perf_counter() - request_started) * 1000)
-        logger.warning("Ox Alpha HTTP timeout after %dms", elapsed)
+        logger.warning("%s HTTP timeout after %dms", provider_name, elapsed)
         raise FormulaProviderUnavailableError(
-            f"Ox Alpha did not answer within {REQUEST_TIMEOUT_SECONDS:.0f}s"
+            f"{provider_name} did not answer within {REQUEST_TIMEOUT_SECONDS:.0f}s"
         ) from exc
     except httpx.NetworkError as exc:
         elapsed = round((time.perf_counter() - request_started) * 1000)
-        logger.warning("Ox Alpha network error after %dms: %s", elapsed, exc)
-        raise FormulaProviderUnavailableError("Ox Alpha network error") from exc
+        logger.warning("%s network error after %dms: %s", provider_name, elapsed, exc)
+        raise FormulaProviderUnavailableError(f"{provider_name} network error") from exc
     except httpx.HTTPError as exc:
         elapsed = round((time.perf_counter() - request_started) * 1000)
-        logger.warning("OpenRouter HTTP error after %dms: %s", elapsed, exc)
-        raise FormulaProviderUnavailableError("OpenRouter is unreachable") from exc
+        logger.warning("%s HTTP error after %dms: %s", provider_name, elapsed, exc)
+        raise FormulaProviderUnavailableError(f"{provider_name} is unreachable") from exc
 
     elapsed = round((time.perf_counter() - request_started) * 1000)
     if response.status_code >= 400:
         detail = _openrouter_error_detail(response)
         logger.warning(
-            "Ox Alpha HTTP %d after %dms: %s",
+            "%s HTTP %d after %dms: %s",
+            provider_name,
             response.status_code,
             elapsed,
             detail,
         )
         if response.status_code in {401, 403}:
             raise FormulaRecognitionError(
-                f"OpenRouter authentication error {response.status_code}: {detail}"
+                f"{provider_name} authentication error {response.status_code}: {detail}"
             )
         if response.status_code in TRANSIENT_HTTP_STATUSES:
             raise FormulaProviderUnavailableError(
-                f"Ox Alpha temporarily unavailable ({response.status_code}): {detail}"
+                f"{provider_name} temporarily unavailable ({response.status_code}): {detail}"
             )
         raise FormulaRecognitionError(
-            f"OpenRouter error {response.status_code}: {detail}"
+            f"{provider_name} error {response.status_code}: {detail}"
         )
 
     try:
         data = response.json()
         content = data["choices"][0]["message"]["content"]
     except (ValueError, KeyError, IndexError, TypeError) as exc:
-        raise FormulaRecognitionError("invalid OpenRouter response") from exc
+        raise FormulaRecognitionError(f"invalid {provider_name} response") from exc
 
     latex = extract_latex(content)
     if is_no_formula_response(latex):
