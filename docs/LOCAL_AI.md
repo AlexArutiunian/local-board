@@ -12,10 +12,11 @@ git switch feature/web-ai-shell
 bash run_web.sh
 ```
 
-Check:
+Check both runtime and OpenAI compatibility:
 
 ```bash
 curl http://127.0.0.1:8787/api/health
+curl http://127.0.0.1:8787/v1/models
 ```
 
 ## 2. Configure Local Board
